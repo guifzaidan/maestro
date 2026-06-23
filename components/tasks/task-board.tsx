@@ -123,14 +123,14 @@ export function TaskBoard() {
     toast("Tarefa atualizada", "edit");
   };
 
-  const addTask = async (list: TaskList, title: string) => {
+  const addTask = async (list: TaskList, title: string, due: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
     try {
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: trimmed, workspace: active, list }),
+        body: JSON.stringify({ title: trimmed, workspace: active, list, due }),
       });
       const data = await res.json();
       if (data.task) {
@@ -274,7 +274,7 @@ function AddRow({ onAdd }: { onAdd: (title: string) => void }) {
 }
 
 /* ── Hoje ─────────────────────────────────────────────────────── */
-function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
+function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
   const done = tasks.filter((t) => t.done).length;
   return (
     <div>
@@ -297,13 +297,13 @@ function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBr
           ))}
         </motion.div>
       )}
-      <AddRow onAdd={(title) => onAdd(TODAY_LIST, title)} />
+      <AddRow onAdd={(title) => onAdd(TODAY_LIST, title, fmtDate(new Date()))} />
     </div>
   );
 }
 
 /* ── Semana ───────────────────────────────────────────────────── */
-function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
+function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
   return (
     <div className="flex flex-col">
       {TASK_LISTS.map((list, colIdx) => {
@@ -343,7 +343,19 @@ const MONTH_SHORT = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out"
 
 const DOW_TO_LIST: Record<number, TaskList> = { 0: "dom", 1: "seg", 2: "ter", 3: "qua", 4: "qui", 5: "sex", 6: "sab" };
 
-function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
+/** Formata uma data como dd/mm/yyyy (mesmo formato do DatePicker). */
+const fmtDate = (d: Date) =>
+  `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+
+/** Data do dia da semana (seg..dom) na semana corrente — semana começa na segunda. */
+function dateForList(list: TaskList): Date {
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  const monday = now.getDate() - ((now.getDay() + 6) % 7);
+  return new Date(now.getFullYear(), now.getMonth(), monday + LIST_TO_DAY_OFFSET[list]);
+}
+
+function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
   const [selected, setSelected] = useState<number | null>(null);
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
@@ -562,7 +574,10 @@ function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBra
                 {selectedTasks.length === 0 && (
                   <p className="pb-2 text-center text-sm text-muted-2">Nenhuma tarefa.</p>
                 )}
-                <AddRow onAdd={(title) => onAdd(DOW_TO_LIST[new Date(year, month, selected!).getDay()], title)} />
+                <AddRow onAdd={(title) => {
+                  const d = new Date(year, month, selected!);
+                  onAdd(DOW_TO_LIST[d.getDay()], title, fmtDate(d));
+                }} />
               </div>
             </div>
           </motion.div>
@@ -577,7 +592,7 @@ function DaySection({
   list, label, isToday, tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, colIdx, showBranch,
 }: {
   list: TaskList; label: string; isToday: boolean;
-  tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string) => void;
+  tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void;
   onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void;
   onOpenEdit: (task: Task) => void; colIdx: number; showBranch: boolean;
 }) {
@@ -646,7 +661,7 @@ function DaySection({
                   ))}
                 </motion.div>
               )}
-              <AddRow onAdd={(title) => onAdd(list, title)} />
+              <AddRow onAdd={(title) => onAdd(list, title, fmtDate(dateForList(list)))} />
             </div>
           </motion.div>
         )}
