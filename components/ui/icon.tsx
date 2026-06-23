@@ -58,6 +58,8 @@ import {
   Pencil,
   AlertCircle,
   House,
+  Download,
+  Loader2,
   type LucideIcon,
 
 } from "lucide-react";
@@ -162,6 +164,8 @@ const REGISTRY: Record<string, LucideIcon> = {
   Pencil,
   AlertCircle,
   House,
+  Download,
+  Loader: Loader2,
 };
 
 export function Icon({

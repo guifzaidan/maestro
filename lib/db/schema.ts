@@ -14,6 +14,11 @@ export const tasks = sqliteTable("tasks", {
   tools: text("tools"),
   instruction: text("instruction"),
   createdAt: integer("created_at").notNull(),
+  // Vínculo com uma linha de fonte externa (ex.: tabela Turso integrada).
+  // Quando setados, a task é "linkada" e sincroniza por (conn, table, pk).
+  sourceConnection: text("source_connection"),
+  sourceTable: text("source_table"),
+  sourcePk: text("source_pk"),
 });
 
 /** Uma execução/conversa do maestro. */

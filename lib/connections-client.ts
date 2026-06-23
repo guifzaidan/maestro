@@ -62,3 +62,23 @@ export async function introspectConnection(
   });
   return res.json();
 }
+
+export interface ImportResult {
+  imported: number;
+  updated: number;
+  skipped: number;
+  tables: { table: string; rows: number; error?: string }[];
+}
+
+/** Importa/sincroniza as tabelas selecionadas de uma conexão como tasks. */
+export async function importConnection(
+  id: string,
+  workspace: string,
+): Promise<{ result?: ImportResult; error?: string }> {
+  const res = await fetch("/api/connections/import", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ id, workspace }),
+  });
+  return res.json();
+}

@@ -2,6 +2,7 @@ import { eq } from "drizzle-orm";
 import { db, ensureSchema } from "./index";
 import { connections, type Connection } from "./schema";
 import { encryptSecret, decryptSecret } from "../crypto";
+import type { TableMapping } from "../table-mapping";
 
 /** Forma segura enviada ao cliente — nunca inclui o segredo em claro. */
 export interface ConnectionDTO {
@@ -114,4 +115,29 @@ export async function getConnectionTarget(id: string): Promise<{ url: string; to
   const url = row.config ? ((JSON.parse(row.config) as { url?: string }).url ?? "") : "";
   const token = row.secret ? decryptSecret(row.secret) : null;
   return { url, token };
+}
+
+/** Spec completo (server-side) para importar/sincronizar uma conexão Turso. */
+export interface ImportSpec {
+  url: string;
+  token: string | null;
+  tables: string[];
+  mappings: Record<string, TableMapping>;
+  workspace: string | null;
+}
+
+export async function getImportSpec(id: string): Promise<ImportSpec | null> {
+  await ensureSchema();
+  const row = (await db.select().from(connections).where(eq(connections.id, id)))[0];
+  if (!row) return null;
+  const cfg = row.config
+    ? (JSON.parse(row.config) as { url?: string; tables?: string[]; mappings?: Record<string, TableMapping> })
+    : {};
+  return {
+    url: cfg.url ?? "",
+    token: row.secret ? decryptSecret(row.secret) : null,
+    tables: Array.isArray(cfg.tables) ? cfg.tables : [],
+    mappings: cfg.mappings ?? {},
+    workspace: row.workspace,
+  };
 }

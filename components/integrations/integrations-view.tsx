@@ -14,6 +14,7 @@ import {
   saveConnection,
   removeConnection,
   introspectConnection,
+  importConnection,
   type ConnectionDTO,
   type IntrospectedTable,
 } from "@/lib/connections-client";
@@ -252,7 +253,10 @@ function rowsFromDTO(rows: ConnectionDTO[]): DbRow[] {
 
 function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChanged: () => void }) {
   const { toast } = useToast();
+  const { active } = useWorkspace();
   const [conns, setConns] = useState<DbRow[]>(() => rowsFromDTO(rows));
+  // importação em andamento por conexão
+  const [importing, setImporting] = useState<Record<string, boolean>>({});
   // segredo (token) digitado por linha — só em memória até salvar
   const [tokens, setTokens] = useState<Record<string, string>>({});
   // tabelas introspeccionadas por conexão
@@ -373,6 +377,23 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
     applySelection(id, allSelected ? [] : allNames);
   };
 
+  const runImport = async (id: string) => {
+    setImporting((p) => ({ ...p, [id]: true }));
+    try {
+      const { result, error } = await importConnection(id, active);
+      if (error || !result) {
+        toast(error ?? "Falha ao importar", "delete");
+      } else {
+        const parts = [`${result.imported} nova${result.imported === 1 ? "" : "s"}`, `${result.updated} atualizada${result.updated === 1 ? "" : "s"}`];
+        toast(`Importado: ${parts.join(" · ")}`, "create");
+        const failed = result.tables.filter((t) => t.error);
+        if (failed.length) toast(`${failed.length} tabela(s) com erro`, "delete");
+      }
+    } finally {
+      setImporting((p) => ({ ...p, [id]: false }));
+    }
+  };
+
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
@@ -445,6 +466,25 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
                   onToggleAll={(names) => toggleAll(conn.id, names)}
                   onMapping={(t, field, value) => setMapping(conn.id, t, field, value)}
                 />
+              )}
+
+              {/* Importar/sincronizar — só com tabelas selecionadas */}
+              {conn.persisted && conn.selected.length > 0 && (
+                <div className="flex items-center justify-between border-t border-[var(--border)] pt-2">
+                  <span className="text-[10px] text-muted-2">
+                    Cria/atualiza tasks vinculadas em <span className="text-[var(--accent)]">{active}</span>
+                  </span>
+                  <motion.button
+                    whileHover={{ scale: 1.04 }}
+                    whileTap={{ scale: 0.96 }}
+                    disabled={importing[conn.id]}
+                    onClick={() => runImport(conn.id)}
+                    className="flex items-center gap-1.5 rounded-full bg-white px-3 py-1.5 text-[11px] font-medium text-black disabled:opacity-50"
+                  >
+                    <Icon name={importing[conn.id] ? "Loader" : "Download"} size={11} className={importing[conn.id] ? "animate-spin" : ""} />
+                    {importing[conn.id] ? "Importando..." : "Importar agora"}
+                  </motion.button>
+                </div>
               )}
             </div>
           </motion.div>
