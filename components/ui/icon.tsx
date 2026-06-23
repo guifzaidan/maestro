@@ -60,6 +60,7 @@ import {
   House,
   Download,
   Loader2,
+  Inbox,
   type LucideIcon,
 
 } from "lucide-react";
@@ -166,6 +167,7 @@ const REGISTRY: Record<string, LucideIcon> = {
   House,
   Download,
   Loader: Loader2,
+  Inbox,
 };
 
 export function Icon({

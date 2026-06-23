@@ -1,10 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "framer-motion";
 import { useWorkspace } from "@/lib/workspace-context";
-import { PageTransition } from "@/components/shell/page-transition";
-import { Topbar } from "@/components/shell/topbar";
 import { ScopeFilter } from "@/components/shell/scope-filter";
 import { Icon } from "@/components/ui/icon";
 import { useToast } from "@/components/ui/toast";
@@ -21,7 +20,12 @@ import {
 import { autoDetectMapping, type TableMapping } from "@/lib/table-mapping";
 import { cn } from "@/lib/utils";
 
-export function IntegrationsView() {
+/**
+ * Lista de conectores persistida (fonte: API /connections). Renderizada na
+ * aba Integrações das Configurações. `withScopeFilter` mostra o filtro de
+ * contexto + contagem de ativas no topo.
+ */
+export function ConnectorsList({ withScopeFilter = false }: { withScopeFilter?: boolean }) {
   const { scope } = useWorkspace();
   const [persisted, setPersisted] = useState<ConnectionDTO[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -32,7 +36,8 @@ export function IntegrationsView() {
 
   useEffect(() => { reload(); }, [reload]);
 
-  const visible = scope === "all" ? CONNECTORS : CONNECTORS.filter((c) => c.scopes.includes(scope));
+  const visible =
+    withScopeFilter && scope !== "all" ? CONNECTORS.filter((c) => c.scopes.includes(scope)) : CONNECTORS;
 
   // DB é a fonte da verdade quando há registro; senão cai no estado mock.
   const isConnected = (c: Connector) => {
@@ -42,12 +47,13 @@ export function IntegrationsView() {
   const connected = visible.filter(isConnected).length;
 
   return (
-    <PageTransition>
-      <Topbar title="Integrações" subtitle="Conecte a estrutura de cada empresa — Drive, planilhas, docs e bases." />
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <ScopeFilter />
-        <span className="shrink-0 text-xs text-muted-2">{connected} de {visible.length} ativas</span>
-      </div>
+    <>
+      {withScopeFilter && (
+        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <ScopeFilter />
+          <span className="shrink-0 text-xs text-muted-2">{connected} de {visible.length} ativas</span>
+        </div>
+      )}
       <motion.div
         initial="hidden"
         animate="show"
@@ -73,7 +79,7 @@ export function IntegrationsView() {
           </motion.div>
         ))}
       </motion.div>
-    </PageTransition>
+    </>
   );
 }
 
@@ -124,7 +130,8 @@ function ConnectorCard({
   };
 
   return (
-    <div className={cn("glass rounded-2xl overflow-hidden", connected && "glow")}>
+    <div className={cn("rounded-2xl", connected && "glow")}>
+    <div className="glass rounded-2xl overflow-hidden">
       {/* Row */}
       <button
         onClick={onToggle}
@@ -224,6 +231,7 @@ function ConnectorCard({
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
     </div>
   );
 }
@@ -423,10 +431,11 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
                 <input
                   type="text"
                   placeholder="Nome da conexão"
+                  autoComplete="off"
                   value={conn.name}
                   onChange={(e) => setField(conn.id, "name", e.target.value)}
                   onBlur={() => save(conn.id)}
-                  className="min-w-0 flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-muted-2"
+                  className="min-w-0 flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-muted-2 [&:-webkit-autofill]:shadow-[inset_0_0_0_1000px_var(--surface)] [&:-webkit-autofill]:[-webkit-text-fill-color:white]"
                 />
                 <button
                   onClick={() => remove(conn.id)}
@@ -438,20 +447,22 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
               <input
                 type="text"
                 placeholder="libsql://nome.turso.io"
+                autoComplete="off"
                 value={conn.url}
                 onChange={(e) => setField(conn.id, "url", e.target.value)}
                 onBlur={() => save(conn.id)}
-                className="w-full bg-transparent font-mono text-xs text-muted outline-none placeholder:text-muted-2"
+                className="w-full bg-transparent font-mono text-xs text-muted outline-none placeholder:text-muted-2 [&:-webkit-autofill]:shadow-[inset_0_0_0_1000px_var(--surface)] [&:-webkit-autofill]:[-webkit-text-fill-color:theme(colors.zinc.400)]"
               />
               <div className="flex items-center gap-2 border-t border-[var(--border)] pt-2">
                 <span className="text-[10px] text-muted-2">Auth Token</span>
                 <input
                   type="password"
                   placeholder={conn.hasSecret ? "•••••••• (salvo) — cole para trocar" : "Cole o token..."}
+                  autoComplete="new-password"
                   value={tokens[conn.id] ?? ""}
                   onChange={(e) => setTokens((prev) => ({ ...prev, [conn.id]: e.target.value }))}
                   onBlur={() => save(conn.id)}
-                  className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-muted-2"
+                  className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-muted-2 [&:-webkit-autofill]:shadow-[inset_0_0_0_1000px_var(--surface)] [&:-webkit-autofill]:[-webkit-text-fill-color:white]"
                 />
               </div>
 
@@ -622,20 +633,98 @@ function MapSelect({
   options: string[];
   onChange: (v: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const [rect, setRect] = useState<DOMRect | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onMouseDown = (e: MouseEvent) => {
+      if (
+        btnRef.current && !btnRef.current.contains(e.target as Node) &&
+        listRef.current && !listRef.current.contains(e.target as Node)
+      ) setOpen(false);
+    };
+    const onScroll = () => {
+      if (btnRef.current) setRect(btnRef.current.getBoundingClientRect());
+    };
+    document.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [open]);
+
+  const toggle = () => {
+    if (!open && btnRef.current) setRect(btnRef.current.getBoundingClientRect());
+    setOpen((s) => !s);
+  };
+
+  const select = (v: string) => { onChange(v); setOpen(false); };
+
   return (
-    <label className="flex flex-col gap-1">
+    <div className="flex flex-col gap-1">
       <span className="text-[9px] uppercase tracking-wider text-muted-2">{label}</span>
-      <select
-        value={value ?? ""}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[11px] text-white/85 outline-none transition-colors focus:border-[var(--border-strong)]"
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={toggle}
+        className={cn(
+          "flex w-full items-center justify-between gap-1 rounded-lg border px-2 py-1 font-mono text-[11px] transition-colors",
+          open
+            ? "border-[var(--border-strong)] bg-[var(--surface-2)] text-white/85"
+            : "border-[var(--border)] bg-[var(--surface-2)] text-white/70 hover:border-[var(--border-strong)] hover:text-white/85"
+        )}
       >
-        <option value="">—</option>
-        {options.map((o) => (
-          <option key={o} value={o}>{o}</option>
-        ))}
-      </select>
-    </label>
+        <span className="truncate">{value || "—"}</span>
+        <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.15 }}>
+          <Icon name="ChevronDown" size={10} className="shrink-0 text-muted-2" />
+        </motion.span>
+      </button>
+
+      {open && rect && createPortal(
+        <div
+          ref={listRef}
+          style={{
+            position: "fixed",
+            top: rect.bottom + 4,
+            left: rect.left,
+            width: Math.max(rect.width, 140),
+            zIndex: 9999,
+            maxHeight: 220,
+          }}
+          className="rounded-xl border border-[var(--border-strong)] bg-[var(--surface-2)] shadow-xl shadow-black/50 backdrop-blur-md overflow-y-auto"
+        >
+          <button
+            type="button"
+            onClick={() => select("")}
+            className={cn(
+              "flex w-full items-center px-3 py-2 text-left font-mono text-[11px] transition-colors hover:bg-white/[0.06]",
+              !value ? "text-white/85" : "text-muted-2"
+            )}
+          >
+            —
+          </button>
+          {options.map((o) => (
+            <button
+              key={o}
+              type="button"
+              onClick={() => select(o)}
+              className={cn(
+                "flex w-full items-center gap-2 px-3 py-2 text-left font-mono text-[11px] transition-colors hover:bg-white/[0.06]",
+                value === o ? "text-[var(--accent)]" : "text-white/70"
+              )}
+            >
+              {value === o && <Icon name="Check" size={9} className="shrink-0" />}
+              <span className={cn("truncate", value !== o && "pl-[13px]")}>{o}</span>
+            </button>
+          ))}
+        </div>,
+        document.body
+      )}
+    </div>
   );
 }
 

@@ -154,7 +154,7 @@ export function Header() {
                 key={allBranches ? "all" : ws.name}
                 initial={{ opacity: 0, x: -4 }}
                 animate={{ opacity: 1, x: 0 }}
-                className="max-w-[84px] truncate text-sm font-medium sm:max-w-none"
+                className="hidden max-w-[84px] truncate text-sm font-medium sm:inline sm:max-w-none"
               >
                 {allBranches ? "Todas" : ws.name}
               </motion.span>

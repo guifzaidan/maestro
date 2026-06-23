@@ -14,7 +14,7 @@ import { TASK_LISTS, TODAY_LIST, type Task, type TaskList } from "@/lib/mock/tas
 import type { WorkspaceId } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
-type View = "hoje" | "semana" | "mes";
+type View = "hoje" | "semana" | "mes" | "backlog";
 
 const VALID_LISTS: TaskList[] = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"];
 
@@ -43,9 +43,10 @@ function toBoardTask(row: DbTaskRow): Task {
 }
 
 const VIEWS: { id: View; label: string; icon: string }[] = [
-  { id: "hoje",  label: "Hoje",   icon: "Clock" },
-  { id: "semana",label: "Semana", icon: "CalendarRange" },
-  { id: "mes",   label: "Mês",    icon: "Grid3x3" },
+  { id: "hoje",    label: "Hoje",    icon: "Clock" },
+  { id: "semana",  label: "Semana",  icon: "CalendarRange" },
+  { id: "mes",     label: "Mês",     icon: "Grid3x3" },
+  { id: "backlog", label: "Backlog", icon: "Inbox" },
 ];
 
 const itemAnim: Variants = {
@@ -211,12 +212,17 @@ export function TaskBoard() {
       <AnimatePresence mode="wait">
         {!loading && view === "hoje" && (
           <motion.div key="hoje" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
-            <HojeView tasks={visible.filter((t) => t.list === TODAY_LIST)} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
+            <HojeView tasks={visible.filter((t) => t.due === fmtDate(new Date()))} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
           </motion.div>
         )}
         {!loading && view === "semana" && (
           <motion.div key="semana" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
             <SemanaView tasks={visible} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
+          </motion.div>
+        )}
+        {!loading && view === "backlog" && (
+          <motion.div key="backlog" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
+            <BacklogView tasks={visible.filter((t) => !t.due)} onToggle={toggle} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
           </motion.div>
         )}
         {!loading && view === "mes" && (
@@ -308,7 +314,8 @@ function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, show
     <div className="flex flex-col">
       {TASK_LISTS.map((list, colIdx) => {
         const isToday = list.id === TODAY_LIST;
-        const dayTasks = tasks.filter((t) => t.list === list.id);
+        const colDue = fmtDate(dateForList(list.id as TaskList));
+        const dayTasks = tasks.filter((t) => t.due === colDue);
         return (
           <DaySection
             key={list.id}
@@ -590,6 +597,41 @@ function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBra
           </motion.div>
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+/* ── Backlog view ─────────────────────────────────────────────── */
+function BacklogView({ tasks, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
+  tasks: Task[];
+  onToggle: (id: string) => void;
+  onDelete: (id: string, title: string) => void;
+  onEdit: (id: string, title: string) => void;
+  onOpenEdit: (task: Task) => void;
+  showBranch: boolean;
+}) {
+  const done = tasks.filter((t) => t.done).length;
+  return (
+    <div>
+      <p className="mb-4 text-[11px] uppercase tracking-widest text-muted-2">
+        {tasks.length === 0 ? "Nenhuma tarefa sem data." : `${done}/${tasks.length} concluídas`}
+      </p>
+      {tasks.length === 0 ? (
+        <p className="py-6 text-center text-sm text-muted-2">Tudo com data definida.</p>
+      ) : (
+        <motion.div
+          initial="hidden"
+          animate="show"
+          variants={{ show: { transition: { staggerChildren: 0.05 } } }}
+          className="flex flex-col gap-1.5"
+        >
+          {tasks.map((task) => (
+            <motion.div key={task.id} variants={itemAnim} layout>
+              <TaskRow task={task} onToggle={onToggle} onDelete={onDelete} onEdit={onEdit} onOpenEdit={onOpenEdit} showBranch={showBranch} />
+            </motion.div>
+          ))}
+        </motion.div>
+      )}
     </div>
   );
 }
