@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useId } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { PageTransition } from "@/components/shell/page-transition";
@@ -8,14 +8,35 @@ import { Topbar } from "@/components/shell/topbar";
 import { ScopeFilter } from "@/components/shell/scope-filter";
 import { Dot } from "@/components/ui/primitives";
 import { Icon } from "@/components/ui/icon";
+import { useToast } from "@/components/ui/toast";
 import { CONNECTORS, type Connector } from "@/lib/mock/integrations";
+import {
+  fetchConnections,
+  saveConnection,
+  removeConnection,
+  type ConnectionDTO,
+} from "@/lib/connections-client";
 import { cn } from "@/lib/utils";
 
 export function IntegrationsView() {
   const { scope } = useWorkspace();
-  const visible = scope === "all" ? CONNECTORS : CONNECTORS.filter((c) => c.scopes.includes(scope));
-  const connected = visible.filter((c) => c.connected).length;
+  const [persisted, setPersisted] = useState<ConnectionDTO[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
+
+  const reload = useCallback(() => {
+    fetchConnections().then(setPersisted).catch(() => {});
+  }, []);
+
+  useEffect(() => { reload(); }, [reload]);
+
+  const visible = scope === "all" ? CONNECTORS : CONNECTORS.filter((c) => c.scopes.includes(scope));
+
+  // DB é a fonte da verdade quando há registro; senão cai no estado mock.
+  const isConnected = (c: Connector) => {
+    const row = persisted.find((p) => p.id === c.id);
+    return row ? row.connected : c.connected;
+  };
+  const connected = visible.filter(isConnected).length;
 
   return (
     <PageTransition>
@@ -40,8 +61,11 @@ export function IntegrationsView() {
           >
             <ConnectorCard
               connector={c}
+              self={persisted.find((p) => p.id === c.id)}
+              tursoRows={persisted.filter((p) => p.connector === "turso" && p.id !== c.id)}
               open={openId === c.id}
               onToggle={() => setOpenId(openId === c.id ? null : c.id)}
+              onChanged={reload}
             />
           </motion.div>
         ))}
@@ -52,15 +76,49 @@ export function IntegrationsView() {
 
 function ConnectorCard({
   connector,
+  self,
+  tursoRows,
   open,
   onToggle,
+  onChanged,
 }: {
   connector: Connector;
+  self?: ConnectionDTO;
+  tursoRows: ConnectionDTO[];
   open: boolean;
   onToggle: () => void;
+  onChanged: () => void;
 }) {
-  const [connected, setConnected] = useState(connector.connected);
+  const { toast } = useToast();
+  const [connected, setConnected] = useState(self?.connected ?? connector.connected);
   const [showKey, setShowKey] = useState(false);
+  const [cred, setCred] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // Sincroniza quando a lista persistida recarrega.
+  useEffect(() => { setConnected(self?.connected ?? connector.connected); }, [self?.connected, connector.connected]);
+
+  const isDb = connector.category === "db";
+
+  const persist = async (nextConnected: boolean) => {
+    setSaving(true);
+    try {
+      await saveConnection({
+        id: connector.id,
+        connector: connector.id,
+        connected: nextConnected,
+        secret: cred || undefined,
+      });
+      setConnected(nextConnected);
+      setCred("");
+      onChanged();
+      toast(nextConnected ? "Conexão salva" : "Desconectado", nextConnected ? "create" : "delete");
+    } catch {
+      toast("Falha ao salvar", "delete");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className={cn("glass rounded-2xl overflow-hidden", connected && "glow")}>
@@ -109,29 +167,26 @@ function ConnectorCard({
           >
             <div className="border-t border-[var(--border)] px-4 py-4 space-y-4">
               {/* Credential fields — varia por categoria */}
-              {connector.category === "db" ? (
-                <TursoConnections />
+              {isDb ? (
+                <TursoConnections rows={tursoRows} onChanged={onChanged} />
               ) : connector.category === "messaging" ? (
                 <>
-                  <MaskedField label="Account SID" icon="KeyRound" placeholder="ACxxxxxxxxxxxxxxxx" />
-                  <MaskedField label="Auth Token" icon="KeyRound" placeholder="Cole o auth token..." />
-                  <div>
-                    <label className="mb-1.5 block text-xs text-muted">Número Twilio</label>
-                    <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5">
-                      <input
-                        type="text"
-                        placeholder="+55 11 9xxxx-xxxx"
-                        className="min-w-0 flex-1 bg-transparent font-mono text-sm outline-none placeholder:text-muted-2"
-                      />
-                    </div>
-                  </div>
+                  <MaskedField
+                    label="Auth Token"
+                    icon="KeyRound"
+                    placeholder={self?.hasSecret ? "•••••••• (salvo) — cole para trocar" : "Cole o auth token..."}
+                    value={cred}
+                    onChange={setCred}
+                  />
+                  <p className="text-[11px] text-muted-2">Account SID e número podem ser editados em Configurações.</p>
                 </>
               ) : (
                 <MaskedField
                   label="Credencial / API Key"
                   icon="KeyRound"
-                  placeholder="Cole sua chave aqui..."
-                  defaultValue={connected ? "sk-ant-api03-x7Qd...DEMO" : ""}
+                  placeholder={self?.hasSecret ? "•••••••• (salvo) — cole para trocar" : "Cole sua chave aqui..."}
+                  value={cred}
+                  onChange={setCred}
                   showKey={showKey}
                   onToggleShow={() => setShowKey((s) => !s)}
                 />
@@ -152,27 +207,31 @@ function ConnectorCard({
                 </div>
               </div>
 
-              {/* Actions */}
-              <div className="flex items-center justify-end gap-2 pt-1">
-                {connected && (
+              {/* Actions — DB gerencia suas próprias conexões na lista acima */}
+              {!isDb && (
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  {connected && (
+                    <motion.button
+                      whileHover={{ scale: 1.04 }}
+                      whileTap={{ scale: 0.96 }}
+                      disabled={saving}
+                      onClick={() => persist(false)}
+                      className="rounded-full border border-[var(--border)] px-3.5 py-1.5 text-xs text-muted transition-colors hover:border-[var(--border-strong)] hover:text-white disabled:opacity-50"
+                    >
+                      Desconectar
+                    </motion.button>
+                  )}
                   <motion.button
                     whileHover={{ scale: 1.04 }}
                     whileTap={{ scale: 0.96 }}
-                    onClick={() => setConnected(false)}
-                    className="rounded-full border border-[var(--border)] px-3.5 py-1.5 text-xs text-muted transition-colors hover:border-[var(--border-strong)] hover:text-white"
+                    disabled={saving}
+                    onClick={() => persist(true)}
+                    className="rounded-full bg-white px-3.5 py-1.5 text-xs font-medium text-black disabled:opacity-50"
                   >
-                    Desconectar
+                    {connected ? "Salvar" : "Conectar"}
                   </motion.button>
-                )}
-                <motion.button
-                  whileHover={{ scale: 1.04 }}
-                  whileTap={{ scale: 0.96 }}
-                  onClick={() => setConnected(true)}
-                  className="rounded-full bg-white px-3.5 py-1.5 text-xs font-medium text-black"
-                >
-                  {connected ? "Salvar" : "Conectar"}
-                </motion.button>
-              </div>
+                </div>
+              )}
             </div>
           </motion.div>
         )}
@@ -181,22 +240,62 @@ function ConnectorCard({
   );
 }
 
-type DbConnection = { id: string; name: string; url: string; token: string };
+type DbRow = { id: string; name: string; url: string; hasSecret: boolean; persisted: boolean };
 
-const INITIAL_CONNECTIONS: DbConnection[] = [
-  { id: "1", name: "Sheep Production", url: "libsql://sheep-prod.turso.io", token: "eyJhbGci...DEMO" },
-];
+function rowsFromDTO(rows: ConnectionDTO[]): DbRow[] {
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name ?? "",
+    url: (r.config?.url as string) ?? "",
+    hasSecret: r.hasSecret,
+    persisted: true,
+  }));
+}
 
-function TursoConnections() {
-  const [conns, setConns] = useState<DbConnection[]>(INITIAL_CONNECTIONS);
+function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChanged: () => void }) {
+  const { toast } = useToast();
+  const [conns, setConns] = useState<DbRow[]>(() => rowsFromDTO(rows));
+  // segredo (token) digitado por linha — só em memória até salvar
+  const [tokens, setTokens] = useState<Record<string, string>>({});
 
-  const add = () =>
-    setConns((prev) => [...prev, { id: String(Date.now()), name: "", url: "", token: "" }]);
+  // Recarrega a lista quando a fonte persistida muda.
+  useEffect(() => { setConns(rowsFromDTO(rows)); }, [rows]);
 
-  const remove = (id: string) => setConns((prev) => prev.filter((c) => c.id !== id));
+  const add = () => {
+    const id = crypto.randomUUID();
+    setConns((prev) => [...prev, { id, name: "", url: "", hasSecret: false, persisted: false }]);
+  };
 
-  const update = (id: string, field: keyof DbConnection, value: string) =>
+  const setField = (id: string, field: "name" | "url", value: string) =>
     setConns((prev) => prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)));
+
+  const save = async (id: string) => {
+    const c = conns.find((x) => x.id === id);
+    if (!c) return;
+    if (!c.name && !c.url && !tokens[id]) return; // nada pra salvar
+    try {
+      await saveConnection({
+        id,
+        connector: "turso",
+        name: c.name,
+        config: { url: c.url },
+        secret: tokens[id] || undefined,
+      });
+      setConns((prev) => prev.map((x) => (x.id === id ? { ...x, persisted: true, hasSecret: x.hasSecret || !!tokens[id] } : x)));
+      setTokens((prev) => ({ ...prev, [id]: "" }));
+      onChanged();
+    } catch {
+      toast("Falha ao salvar conexão", "delete");
+    }
+  };
+
+  const remove = async (id: string) => {
+    const c = conns.find((x) => x.id === id);
+    setConns((prev) => prev.filter((x) => x.id !== id));
+    if (c?.persisted) {
+      try { await removeConnection(id); onChanged(); toast("Conexão removida", "delete"); } catch { /* ignore */ }
+    }
+  };
 
   return (
     <div className="space-y-3">
@@ -227,8 +326,9 @@ function TursoConnections() {
                 <input
                   type="text"
                   placeholder="Nome da conexão"
-                  defaultValue={conn.name}
-                  onChange={(e) => update(conn.id, "name", e.target.value)}
+                  value={conn.name}
+                  onChange={(e) => setField(conn.id, "name", e.target.value)}
+                  onBlur={() => save(conn.id)}
                   className="min-w-0 flex-1 bg-transparent text-sm font-medium outline-none placeholder:text-muted-2"
                 />
                 <button
@@ -241,17 +341,19 @@ function TursoConnections() {
               <input
                 type="text"
                 placeholder="libsql://nome.turso.io"
-                defaultValue={conn.url}
-                onChange={(e) => update(conn.id, "url", e.target.value)}
+                value={conn.url}
+                onChange={(e) => setField(conn.id, "url", e.target.value)}
+                onBlur={() => save(conn.id)}
                 className="w-full bg-transparent font-mono text-xs text-muted outline-none placeholder:text-muted-2"
               />
               <div className="flex items-center gap-2 border-t border-[var(--border)] pt-2">
                 <span className="text-[10px] text-muted-2">Auth Token</span>
                 <input
                   type="password"
-                  placeholder="Cole o token..."
-                  defaultValue={conn.token}
-                  onChange={(e) => update(conn.id, "token", e.target.value)}
+                  placeholder={conn.hasSecret ? "•••••••• (salvo) — cole para trocar" : "Cole o token..."}
+                  value={tokens[conn.id] ?? ""}
+                  onChange={(e) => setTokens((prev) => ({ ...prev, [conn.id]: e.target.value }))}
+                  onBlur={() => save(conn.id)}
                   className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-muted-2"
                 />
               </div>
@@ -267,14 +369,16 @@ function MaskedField({
   label,
   icon = "KeyRound",
   placeholder,
-  defaultValue = "",
+  value,
+  onChange,
   showKey,
   onToggleShow,
 }: {
   label: string;
   icon?: string;
   placeholder: string;
-  defaultValue?: string;
+  value: string;
+  onChange: (v: string) => void;
   showKey?: boolean;
   onToggleShow?: () => void;
 }) {
@@ -288,7 +392,8 @@ function MaskedField({
         <input
           type={masked || showKey ? "text" : "password"}
           placeholder={placeholder}
-          defaultValue={defaultValue}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
           className="min-w-0 flex-1 bg-transparent font-mono text-sm outline-none placeholder:text-muted-2"
         />
         {onToggleShow && (

@@ -33,7 +33,26 @@ export const messages = sqliteTable("messages", {
   createdAt: integer("created_at").notNull(),
 });
 
+/**
+ * Conexões/integrações configuradas pela UI. `connector` é o id do conector
+ * (claude|gdrive|turso|notion…). `config` guarda JSON de campos não-secretos
+ * (url, número, etc.). `secret` guarda o token/key CIFRADO (AES-256-GCM).
+ */
+export const connections = sqliteTable("connections", {
+  id: text("id").primaryKey(),
+  connector: text("connector").notNull(),
+  workspace: text("workspace"),
+  name: text("name"),
+  config: text("config"),
+  secret: text("secret"),
+  connected: integer("connected", { mode: "boolean" }).notNull().default(false),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull(),
+});
+
 export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;
 export type AgentRun = typeof agentRuns.$inferSelect;
 export type Message = typeof messages.$inferSelect;
+export type Connection = typeof connections.$inferSelect;
+export type NewConnection = typeof connections.$inferInsert;
