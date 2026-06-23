@@ -17,6 +17,7 @@ import {
   type ConnectionDTO,
   type IntrospectedTable,
 } from "@/lib/connections-client";
+import { autoDetectMapping, type TableMapping } from "@/lib/table-mapping";
 import { cn } from "@/lib/utils";
 
 export function IntegrationsView() {
@@ -226,7 +227,15 @@ function ConnectorCard({
   );
 }
 
-type DbRow = { id: string; name: string; url: string; hasSecret: boolean; persisted: boolean; selected: string[] };
+type DbRow = {
+  id: string;
+  name: string;
+  url: string;
+  hasSecret: boolean;
+  persisted: boolean;
+  selected: string[];
+  mappings: Record<string, TableMapping>;
+};
 type TablesState = { loading: boolean; error: string | null; tables: IntrospectedTable[] };
 
 function rowsFromDTO(rows: ConnectionDTO[]): DbRow[] {
@@ -237,6 +246,7 @@ function rowsFromDTO(rows: ConnectionDTO[]): DbRow[] {
     hasSecret: r.hasSecret,
     persisted: true,
     selected: Array.isArray(r.config?.tables) ? (r.config!.tables as string[]) : [],
+    mappings: (r.config?.mappings as Record<string, TableMapping>) ?? {},
   }));
 }
 
@@ -247,20 +257,25 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
   const [tokens, setTokens] = useState<Record<string, string>>({});
   // tabelas introspeccionadas por conexão
   const [tablesByConn, setTablesByConn] = useState<Record<string, TablesState>>({});
-  // seleção corrente por conexão — ref síncrono para evitar corrida em cliques rápidos
+  // seleção/mapeamento correntes por conexão — refs síncronos p/ evitar corrida em cliques rápidos
   const selRef = useRef<Record<string, string[]>>({});
+  const mapRef = useRef<Record<string, Record<string, TableMapping>>>({});
 
   // Recarrega a lista quando a fonte persistida muda.
   useEffect(() => {
     const next = rowsFromDTO(rows);
     setConns(next);
-    next.forEach((r) => { selRef.current[r.id] = r.selected; });
+    next.forEach((r) => {
+      selRef.current[r.id] = r.selected;
+      mapRef.current[r.id] = r.mappings;
+    });
   }, [rows]);
 
   const add = () => {
     const id = crypto.randomUUID();
     selRef.current[id] = [];
-    setConns((prev) => [...prev, { id, name: "", url: "", hasSecret: false, persisted: false, selected: [] }]);
+    mapRef.current[id] = {};
+    setConns((prev) => [...prev, { id, name: "", url: "", hasSecret: false, persisted: false, selected: [], mappings: {} }]);
   };
 
   const setField = (id: string, field: "name" | "url", value: string) =>
@@ -276,7 +291,7 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
         id,
         connector: "turso",
         name: c.name,
-        config: { url: c.url, tables: c.selected },
+        config: { url: c.url, tables: c.selected, mappings: c.mappings },
         secret: tokens[id] || undefined,
       });
       setConns((prev) => prev.map((x) => (x.id === id ? { ...c, persisted: true, hasSecret: x.hasSecret || !!tokens[id] } : x)));
@@ -303,15 +318,48 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
       setTablesByConn((p) => ({ ...p, [id]: { loading: false, error: res.error!, tables: [] } }));
       toast("Falha ao ler tabelas", "delete");
     } else {
-      setTablesByConn((p) => ({ ...p, [id]: { loading: false, error: null, tables: res.tables ?? [] } }));
+      const tables = res.tables ?? [];
+      setTablesByConn((p) => ({ ...p, [id]: { loading: false, error: null, tables } }));
+      // Para seleções já salvas sem mapeamento, deriva um agora.
+      const selected = selRef.current[id] ?? [];
+      const cur = mapRef.current[id] ?? {};
+      const next = { ...cur };
+      let changed = false;
+      for (const name of selected) {
+        if (!next[name]) {
+          const t = tables.find((x) => x.name === name);
+          if (t) { next[name] = autoDetectMapping(t.columns); changed = true; }
+        }
+      }
+      if (changed) {
+        mapRef.current[id] = next;
+        setConns((prev) => prev.map((c) => (c.id === id ? { ...c, mappings: next } : c)));
+        save(id, { mappings: next });
+      }
     }
   };
 
-  // Aplica nova seleção a partir do ref síncrono (robusto a cliques rápidos).
+  // Aplica nova seleção a partir dos refs síncronos (robusto a cliques rápidos).
   const applySelection = (id: string, selected: string[]) => {
     selRef.current[id] = selected;
-    setConns((prev) => prev.map((c) => (c.id === id ? { ...c, selected } : c)));
-    save(id, { selected });
+    const tables = tablesByConn[id]?.tables ?? [];
+    const cur = mapRef.current[id] ?? {};
+    const mappings: Record<string, TableMapping> = {};
+    for (const name of selected) {
+      mappings[name] = cur[name] ?? autoDetectMapping(tables.find((x) => x.name === name)?.columns ?? []);
+    }
+    mapRef.current[id] = mappings;
+    setConns((prev) => prev.map((c) => (c.id === id ? { ...c, selected, mappings } : c)));
+    save(id, { selected, mappings });
+  };
+
+  // Override manual de um campo do mapeamento de uma tabela.
+  const setMapping = (id: string, table: string, field: keyof TableMapping, value: string) => {
+    const cur = mapRef.current[id] ?? {};
+    const next = { ...cur, [table]: { ...cur[table], [field]: value || undefined } };
+    mapRef.current[id] = next;
+    setConns((prev) => prev.map((c) => (c.id === id ? { ...c, mappings: next } : c)));
+    save(id, { mappings: next });
   };
 
   const toggleTable = (id: string, table: string) => {
@@ -391,9 +439,11 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
                 <TablesPicker
                   state={tablesByConn[conn.id]}
                   selected={conn.selected}
+                  mappings={conn.mappings}
                   onLoad={() => loadTables(conn.id)}
                   onToggle={(t) => toggleTable(conn.id, t)}
                   onToggleAll={(names) => toggleAll(conn.id, names)}
+                  onMapping={(t, field, value) => setMapping(conn.id, t, field, value)}
                 />
               )}
             </div>
@@ -407,15 +457,19 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
 function TablesPicker({
   state,
   selected,
+  mappings,
   onLoad,
   onToggle,
   onToggleAll,
+  onMapping,
 }: {
   state: TablesState | undefined;
   selected: string[];
+  mappings: Record<string, TableMapping>;
   onLoad: () => void;
   onToggle: (table: string) => void;
   onToggleAll: (names: string[]) => void;
+  onMapping: (table: string, field: keyof TableMapping, value: string) => void;
 }) {
   const tables = state?.tables ?? [];
   const names = tables.map((t) => t.name);
@@ -456,27 +510,92 @@ function TablesPicker({
           {tables.map((t) => {
             const on = selected.includes(t.name);
             return (
-              <button
-                key={t.name}
-                onClick={() => onToggle(t.name)}
-                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.03]"
-              >
-                <span className={cn(
-                  "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
-                  on ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border-strong)]"
-                )}>
-                  {on && <Icon name="Check" size={9} className="text-black" />}
-                </span>
-                <span className="flex-1 truncate font-mono text-[12px] text-white/85">{t.name}</span>
-                <span className="shrink-0 text-[10px] text-muted-2">
-                  {t.rowCount ?? "?"} linha{t.rowCount === 1 ? "" : "s"} · {t.columns.length} col
-                </span>
-              </button>
+              <div key={t.name}>
+                <button
+                  onClick={() => onToggle(t.name)}
+                  className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.03]"
+                >
+                  <span className={cn(
+                    "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
+                    on ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border-strong)]"
+                  )}>
+                    {on && <Icon name="Check" size={9} className="text-black" />}
+                  </span>
+                  <span className="flex-1 truncate font-mono text-[12px] text-white/85">{t.name}</span>
+                  <span className="shrink-0 text-[10px] text-muted-2">
+                    {t.rowCount ?? "?"} linha{t.rowCount === 1 ? "" : "s"} · {t.columns.length} col
+                  </span>
+                </button>
+                <AnimatePresence initial={false}>
+                  {on && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.2 }}
+                      className="overflow-hidden"
+                    >
+                      <MappingFields
+                        columns={t.columns}
+                        mapping={mappings[t.name] ?? {}}
+                        onChange={(field, value) => onMapping(t.name, field, value)}
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             );
           })}
         </div>
       )}
     </div>
+  );
+}
+
+function MappingFields({
+  columns,
+  mapping,
+  onChange,
+}: {
+  columns: { name: string; type: string; pk: boolean }[];
+  mapping: TableMapping;
+  onChange: (field: keyof TableMapping, value: string) => void;
+}) {
+  const opts = columns.map((c) => c.name);
+  return (
+    <div className="ml-6 mt-1 mb-1.5 grid grid-cols-3 gap-1.5">
+      <MapSelect label="Título" value={mapping.title} options={opts} onChange={(v) => onChange("title", v)} />
+      <MapSelect label="Data" value={mapping.date} options={opts} onChange={(v) => onChange("date", v)} />
+      <MapSelect label="Status" value={mapping.status} options={opts} onChange={(v) => onChange("status", v)} />
+    </div>
+  );
+}
+
+function MapSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string | undefined;
+  options: string[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[9px] uppercase tracking-wider text-muted-2">{label}</span>
+      <select
+        value={value ?? ""}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full rounded-lg border border-[var(--border)] bg-[var(--surface-2)] px-2 py-1 font-mono text-[11px] text-white/85 outline-none transition-colors focus:border-[var(--border-strong)]"
+      >
+        <option value="">—</option>
+        {options.map((o) => (
+          <option key={o} value={o}>{o}</option>
+        ))}
+      </select>
+    </label>
   );
 }
 
