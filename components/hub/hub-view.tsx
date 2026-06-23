@@ -366,14 +366,18 @@ export function HubView() {
             blur menor, sem feixes/mix-blend) para evitar flicker e travamento. */}
         {isMobile ? (
           <div className="pointer-events-none absolute left-1/2 top-[-180px] -z-10 h-[calc(100%+180px)] w-screen -translate-x-1/2 overflow-hidden">
-            <motion.div className="absolute left-1/2 top-1/4 h-[60vh] w-[60vh] rounded-full will-change-transform"
-              style={{ background: `radial-gradient(closest-side, ${activeWs.accent}, transparent 70%)`, filter: "blur(55px)", opacity: 0.5 }}
-              animate={{ x: ["-60%", "-35%", "-60%"], y: ["-18%", "6%", "-18%"], scale: [1, 1.12, 1] }}
+            <motion.div className="absolute left-[28%] top-[18%] h-[52vh] w-[52vh] rounded-full will-change-transform"
+              style={{ background: "radial-gradient(closest-side, #f59e0b, transparent 70%)", filter: "blur(55px)", opacity: 0.42 }}
+              animate={{ x: ["-50%", "-25%", "-50%"], y: ["-12%", "8%", "-12%"], scale: [1, 1.12, 1] }}
               transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }} />
-            <motion.div className="absolute left-1/2 top-1/3 h-[48vh] w-[48vh] rounded-full will-change-transform"
-              style={{ background: `radial-gradient(closest-side, ${activeWs.accent2}, transparent 70%)`, filter: "blur(55px)", opacity: 0.4 }}
-              animate={{ x: ["-25%", "-50%", "-25%"], y: ["4%", "-12%", "4%"], scale: [1.05, 0.92, 1.05] }}
+            <motion.div className="absolute left-[60%] top-[26%] h-[46vh] w-[46vh] rounded-full will-change-transform"
+              style={{ background: "radial-gradient(closest-side, #22d3ee, transparent 70%)", filter: "blur(55px)", opacity: 0.34 }}
+              animate={{ x: ["-55%", "-30%", "-55%"], y: ["4%", "-14%", "4%"], scale: [1.05, 0.92, 1.05] }}
               transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }} />
+            <motion.div className="absolute left-[45%] top-[40%] h-[50vh] w-[50vh] rounded-full will-change-transform"
+              style={{ background: "radial-gradient(closest-side, #a855f7, transparent 70%)", filter: "blur(55px)", opacity: 0.32 }}
+              animate={{ x: ["-40%", "-58%", "-40%"], y: ["0%", "-10%", "0%"], scale: [0.95, 1.15, 0.95] }}
+              transition={{ duration: 25, repeat: Infinity, ease: "easeInOut" }} />
             <div className="absolute inset-0" style={{ background: "radial-gradient(135% 100% at 50% 30%, transparent 55%, rgba(7,7,8,0.4) 100%)" }} />
           </div>
         ) : (
