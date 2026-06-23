@@ -2,11 +2,10 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import { PageTransition } from "@/components/shell/page-transition";
 import { Topbar } from "@/components/shell/topbar";
 import { ScopeFilter } from "@/components/shell/scope-filter";
-import { Dot } from "@/components/ui/primitives";
 import { Icon } from "@/components/ui/icon";
 import { useToast } from "@/components/ui/toast";
 import { CONNECTORS, type Connector } from "@/lib/mock/integrations";
@@ -193,21 +192,6 @@ function ConnectorCard({
                   onToggleShow={() => setShowKey((s) => !s)}
                 />
               )}
-
-              {/* Scopes */}
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-muted-2">Contextos:</span>
-                <div className="flex items-center gap-1.5">
-                  {connector.scopes.map((s) => {
-                    const ws = getWorkspace(s);
-                    return (
-                      <span key={s} className="flex items-center gap-1 rounded-full bg-[var(--surface)] px-2 py-0.5 text-[10px] text-muted">
-                        <Dot color={ws.accent} size={6} /> {ws.name}
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
 
               {/* Actions — DB gerencia suas próprias conexões na lista acima */}
               {!isDb && (
