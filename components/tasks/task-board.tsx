@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { DatePicker } from "@/components/ui/date-picker";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { useWorkspace, getWorkspace, WORKSPACES } from "@/lib/workspace-context";
 import { WorkspaceDot } from "@/components/shell/header";
 import { PageTransition } from "@/components/shell/page-transition";
@@ -48,9 +48,9 @@ const VIEWS: { id: View; label: string; icon: string }[] = [
   { id: "mes",   label: "Mês",    icon: "Grid3x3" },
 ];
 
-const itemAnim = {
+const itemAnim: Variants = {
   hidden: { opacity: 0, y: 6 },
-  show:   { opacity: 1, y: 0, transition: { duration: 0.22, ease: [0.25,0.46,0.45,0.94] } },
+  show:   { opacity: 1, y: 0, transition: { duration: 0.22, ease: [0.25,0.46,0.45,0.94] as [number,number,number,number] } },
 };
 
 export function TaskBoard() {
