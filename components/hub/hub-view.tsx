@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import type { WorkspaceId } from "@/lib/theme";
 import { streamAgent, toolLabel, friendlyAgentError, type AgentMessage } from "@/lib/agent/client";
 import { DatePicker } from "@/components/ui/date-picker";
+import { useIsMobile } from "@/lib/use-is-mobile";
 
 const BEAMS = [
   { color: "#f59e0b", left: "30%", angle: -26, width: 130, dur: 9,  delay: 0 },
@@ -39,6 +40,7 @@ type InputMode = "text" | "audio";
 
 export function HubView() {
   const { active, setActive } = useWorkspace();
+  const isMobile = useIsMobile();
   const [phase, setPhase] = useState<Phase>("idle");
   const [mode, setMode] = useState<InputMode>("text");
   const [selected, setSelected] = useState<WorkspaceId | null>(null);
@@ -360,38 +362,53 @@ export function HubView() {
     <PageTransition>
       <div className="relative flex min-h-[calc(100vh-72px)] flex-col items-center justify-center pb-16 pt-6">
 
-        {/* Aurora background */}
-        <motion.div
-          className="pointer-events-none absolute left-1/2 top-[-180px] -z-10 h-[calc(100%+180px)] w-screen -translate-x-1/2 overflow-hidden"
-          animate={{ filter: ["hue-rotate(0deg)", "hue-rotate(360deg)"] }}
-          transition={{ duration: 24, repeat: Infinity, ease: "linear" }}
-        >
-          <motion.div className="absolute left-1/2 top-1/4 h-[65vh] w-[65vh] rounded-full"
-            style={{ background: `radial-gradient(closest-side, ${activeWs.accent}, transparent 68%)`, filter: "blur(80px)" }}
-            animate={{ x: ["-62%", "-28%", "-68%", "-62%"], y: ["-22%", "12%", "-6%", "-22%"], scale: [1, 1.22, 0.92, 1], opacity: [0.5, 0.65, 0.42, 0.5] }}
-            transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }} />
-          <motion.div className="absolute left-1/2 top-1/3 h-[52vh] w-[52vh] rounded-full"
-            style={{ background: `radial-gradient(closest-side, ${activeWs.accent2}, transparent 68%)`, filter: "blur(90px)" }}
-            animate={{ x: ["-18%", "-58%", "-12%", "-18%"], y: ["2%", "-18%", "18%", "2%"], scale: [1.05, 0.88, 1.25, 1.05], opacity: [0.4, 0.55, 0.35, 0.4] }}
-            transition={{ duration: 19, repeat: Infinity, ease: "easeInOut" }} />
-          <motion.div className="absolute right-0 bottom-0 h-[48vh] w-[48vh] rounded-full"
-            style={{ background: "radial-gradient(closest-side, rgba(99,102,241,0.9), transparent 68%)", filter: "blur(95px)" }}
-            animate={{ x: ["12%", "-12%", "18%", "12%"], y: ["12%", "-6%", "6%", "12%"], scale: [1, 1.2, 0.92, 1], opacity: [0.3, 0.42, 0.24, 0.3] }}
-            transition={{ duration: 23, repeat: Infinity, ease: "easeInOut" }} />
-          <motion.div className="absolute left-0 top-0 h-[42vh] w-[42vh] rounded-full"
-            style={{ background: `radial-gradient(closest-side, ${activeWs.accent}, transparent 70%)`, filter: "blur(100px)" }}
-            animate={{ x: ["-20%", "10%", "-25%", "-20%"], y: ["-15%", "10%", "0%", "-15%"], scale: [0.95, 1.15, 1, 0.95], opacity: [0.28, 0.4, 0.22, 0.28] }}
-            transition={{ duration: 21, repeat: Infinity, ease: "easeInOut" }} />
-          <div className="absolute inset-0" style={{ mixBlendMode: "screen" }}>
-            {BEAMS.map((b, i) => (
-              <motion.div key={i} className="absolute top-[-15%] h-[150vh] origin-top"
-                style={{ left: b.left, width: b.width, background: `linear-gradient(to bottom, ${b.color}, transparent 96%)`, filter: "blur(45px)" }}
-                animate={{ rotate: [b.angle - 5, b.angle + 5, b.angle - 5], opacity: [0.18, 0.45, 0.18] }}
-                transition={{ duration: b.dur, delay: b.delay, repeat: Infinity, ease: "easeInOut" }} />
-            ))}
+        {/* Aurora background — mobile recebe versão leve (sem filter animado,
+            blur menor, sem feixes/mix-blend) para evitar flicker e travamento. */}
+        {isMobile ? (
+          <div className="pointer-events-none absolute left-1/2 top-[-180px] -z-10 h-[calc(100%+180px)] w-screen -translate-x-1/2 overflow-hidden">
+            <motion.div className="absolute left-1/2 top-1/4 h-[60vh] w-[60vh] rounded-full will-change-transform"
+              style={{ background: `radial-gradient(closest-side, ${activeWs.accent}, transparent 70%)`, filter: "blur(55px)", opacity: 0.5 }}
+              animate={{ x: ["-60%", "-35%", "-60%"], y: ["-18%", "6%", "-18%"], scale: [1, 1.12, 1] }}
+              transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }} />
+            <motion.div className="absolute left-1/2 top-1/3 h-[48vh] w-[48vh] rounded-full will-change-transform"
+              style={{ background: `radial-gradient(closest-side, ${activeWs.accent2}, transparent 70%)`, filter: "blur(55px)", opacity: 0.4 }}
+              animate={{ x: ["-25%", "-50%", "-25%"], y: ["4%", "-12%", "4%"], scale: [1.05, 0.92, 1.05] }}
+              transition={{ duration: 22, repeat: Infinity, ease: "easeInOut" }} />
+            <div className="absolute inset-0" style={{ background: "radial-gradient(135% 100% at 50% 30%, transparent 55%, rgba(7,7,8,0.4) 100%)" }} />
           </div>
-          <div className="absolute inset-0" style={{ background: "radial-gradient(135% 100% at 50% 30%, transparent 55%, rgba(7,7,8,0.4) 100%)" }} />
-        </motion.div>
+        ) : (
+          <motion.div
+            className="pointer-events-none absolute left-1/2 top-[-180px] -z-10 h-[calc(100%+180px)] w-screen -translate-x-1/2 overflow-hidden"
+            animate={{ filter: ["hue-rotate(0deg)", "hue-rotate(360deg)"] }}
+            transition={{ duration: 24, repeat: Infinity, ease: "linear" }}
+          >
+            <motion.div className="absolute left-1/2 top-1/4 h-[65vh] w-[65vh] rounded-full"
+              style={{ background: `radial-gradient(closest-side, ${activeWs.accent}, transparent 68%)`, filter: "blur(80px)" }}
+              animate={{ x: ["-62%", "-28%", "-68%", "-62%"], y: ["-22%", "12%", "-6%", "-22%"], scale: [1, 1.22, 0.92, 1], opacity: [0.5, 0.65, 0.42, 0.5] }}
+              transition={{ duration: 15, repeat: Infinity, ease: "easeInOut" }} />
+            <motion.div className="absolute left-1/2 top-1/3 h-[52vh] w-[52vh] rounded-full"
+              style={{ background: `radial-gradient(closest-side, ${activeWs.accent2}, transparent 68%)`, filter: "blur(90px)" }}
+              animate={{ x: ["-18%", "-58%", "-12%", "-18%"], y: ["2%", "-18%", "18%", "2%"], scale: [1.05, 0.88, 1.25, 1.05], opacity: [0.4, 0.55, 0.35, 0.4] }}
+              transition={{ duration: 19, repeat: Infinity, ease: "easeInOut" }} />
+            <motion.div className="absolute right-0 bottom-0 h-[48vh] w-[48vh] rounded-full"
+              style={{ background: "radial-gradient(closest-side, rgba(99,102,241,0.9), transparent 68%)", filter: "blur(95px)" }}
+              animate={{ x: ["12%", "-12%", "18%", "12%"], y: ["12%", "-6%", "6%", "12%"], scale: [1, 1.2, 0.92, 1], opacity: [0.3, 0.42, 0.24, 0.3] }}
+              transition={{ duration: 23, repeat: Infinity, ease: "easeInOut" }} />
+            <motion.div className="absolute left-0 top-0 h-[42vh] w-[42vh] rounded-full"
+              style={{ background: `radial-gradient(closest-side, ${activeWs.accent}, transparent 70%)`, filter: "blur(100px)" }}
+              animate={{ x: ["-20%", "10%", "-25%", "-20%"], y: ["-15%", "10%", "0%", "-15%"], scale: [0.95, 1.15, 1, 0.95], opacity: [0.28, 0.4, 0.22, 0.28] }}
+              transition={{ duration: 21, repeat: Infinity, ease: "easeInOut" }} />
+            <div className="absolute inset-0" style={{ mixBlendMode: "screen" }}>
+              {BEAMS.map((b, i) => (
+                <motion.div key={i} className="absolute top-[-15%] h-[150vh] origin-top"
+                  style={{ left: b.left, width: b.width, background: `linear-gradient(to bottom, ${b.color}, transparent 96%)`, filter: "blur(45px)" }}
+                  animate={{ rotate: [b.angle - 5, b.angle + 5, b.angle - 5], opacity: [0.18, 0.45, 0.18] }}
+                  transition={{ duration: b.dur, delay: b.delay, repeat: Infinity, ease: "easeInOut" }} />
+              ))}
+            </div>
+            <div className="absolute inset-0" style={{ background: "radial-gradient(135% 100% at 50% 30%, transparent 55%, rgba(7,7,8,0.4) 100%)" }} />
+          </motion.div>
+        )}
 
         {/* Hero */}
         <motion.div layout initial={{ opacity: 0, y: 22 }} animate={{ opacity: 1, y: 0 }}
