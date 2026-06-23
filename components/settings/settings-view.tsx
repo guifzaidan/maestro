@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { WORKSPACES, type Workspace } from "@/lib/theme";
+import type { Workspace } from "@/lib/theme";
 import { useWorkspace } from "@/lib/workspace-context";
 import { PageTransition } from "@/components/shell/page-transition";
 import { Topbar } from "@/components/shell/topbar";
@@ -17,7 +17,7 @@ import { cn } from "@/lib/utils";
 const MASKED = "sk-ant-••••••••••••••••••••••••";
 
 const TABS = [
-  { id: "branches",      label: "Branchs",     icon: "GitPullRequest" },
+  { id: "branches",      label: "Branches",    icon: "GitPullRequest" },
   { id: "integrations",  label: "Integrações",  icon: "Plug"           },
 ];
 
@@ -90,9 +90,10 @@ export function SettingsView() {
 }
 
 function BranchesTab() {
+  const { branches } = useWorkspace();
   return (
     <div className="space-y-4">
-      {WORKSPACES.map((w, i) => (
+      {branches.map((w, i) => (
         <motion.div
           key={w.id}
           initial={{ opacity: 0, y: 20 }}

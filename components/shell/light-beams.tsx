@@ -2,7 +2,7 @@
 
 import { AnimatePresence, motion } from "framer-motion";
 import { usePathname } from "next/navigation";
-import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
+import { useWorkspace } from "@/lib/workspace-context";
 
 /**
  * Feixes de luz de fundo — mesmos da home, mas coloridos pela paleta da
@@ -35,8 +35,7 @@ const MULTI = ["#f59e0b", "#22d3ee", "#10b981", "#3b82f6", "#a855f7", "#f97316"]
 
 export function LightBeams() {
   const pathname = usePathname();
-  const { active, allBranches } = useWorkspace();
-  const ws = getWorkspace(active);
+  const { allBranches, activeWorkspace: ws } = useWorkspace();
 
   // A home tem seus próprios feixes coloridos variados (não seguem a branch).
   if (pathname === "/") return null;
@@ -51,7 +50,7 @@ export function LightBeams() {
 
   // Chave da seleção — ao mudar, o conjunto de feixes remonta e os novos
   // "surgem" (crossfade) na cor da branch, enquanto os antigos somem.
-  const sel = allBranches ? "all" : active;
+  const sel = allBranches ? "all" : ws.id;
 
   return (
     <div className="pointer-events-none fixed inset-0 z-0 overflow-hidden">

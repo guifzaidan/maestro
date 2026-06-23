@@ -2,12 +2,11 @@
 
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { useWorkspace, WORKSPACES, getWorkspace } from "@/lib/workspace-context";
+import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { Icon } from "@/components/ui/icon";
 import { PageTransition } from "@/components/shell/page-transition";
 import { CONNECTORS } from "@/lib/mock/integrations";
 import { cn } from "@/lib/utils";
-import type { WorkspaceId } from "@/lib/theme";
 import { streamAgent, toolLabel, friendlyAgentError, type AgentMessage } from "@/lib/agent/client";
 import { DatePicker } from "@/components/ui/date-picker";
 import { useIsMobile } from "@/lib/use-is-mobile";
@@ -39,11 +38,11 @@ type Phase = "idle" | "choosing" | "panel" | "chat" | "confirm" | "executing";
 type InputMode = "text" | "audio";
 
 export function HubView() {
-  const { active, setActive } = useWorkspace();
+  const { active, setActive, branches, activeWorkspace: activeWs } = useWorkspace();
   const isMobile = useIsMobile();
   const [phase, setPhase] = useState<Phase>("idle");
   const [mode, setMode] = useState<InputMode>("text");
-  const [selected, setSelected] = useState<WorkspaceId | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [linked, setLinked] = useState<string[]>([]);
   const [sent, setSent] = useState(false);
@@ -77,7 +76,6 @@ export function HubView() {
   const abortRef = useRef<AbortController | null>(null);
 
   const ws = selected ? getWorkspace(selected) : null;
-  const activeWs = getWorkspace(active);
   const tools = selected ? CONNECTORS.filter((c) => c.scopes.includes(selected) && c.id !== "claude") : [];
 
   useEffect(() => {
@@ -225,7 +223,7 @@ export function HubView() {
 
   const closePanel = () => { setPhase("idle"); setSelected(null); setInput(""); setLinked([]); setSent(false); };
 
-  const pickBranch = (id: WorkspaceId) => { setSelected(id); setActive(id); setLinked([]); };
+  const pickBranch = (id: string) => { setSelected(id); setActive(id); setLinked([]); };
 
   const toggleTool = (id: string) =>
     setLinked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
@@ -555,10 +553,10 @@ export function HubView() {
                       <div className="px-5 pt-5 pb-3">
                         <p className="mb-2.5 text-[11px] text-muted-2">Selecionar branch</p>
                         <div className="flex gap-2">
-                          {WORKSPACES.map((w) => {
+                          {branches.map((w) => {
                             const isSel = selected === w.id;
                             return (
-                              <motion.button key={w.id} onClick={() => pickBranch(w.id as WorkspaceId)} whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+                              <motion.button key={w.id} onClick={() => pickBranch(w.id)} whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
                                 className="flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-all"
                                 style={{ borderColor: isSel ? w.accent : "var(--border)", background: isSel ? `${w.accent}1f` : "var(--surface)", color: isSel ? "#fff" : "var(--muted)" }}>
                                 <span className="h-2 w-2 rounded-full shrink-0" style={{ background: w.accent }} />
@@ -960,6 +958,7 @@ function MindMap({ nodes, onChange }: { nodes: MindNode[]; onChange: (nodes: Min
 
 /* �"?�"? NodeCard �"?�"? */
 function NodeCard({ node, onChange, onOpenChange, growMaxH }: { node: MindNode; onChange: (val: string) => void; onOpenChange?: (open: boolean) => void; growMaxH?: number }) {
+  const { branches } = useWorkspace();
   const [open, setOpen] = useState(false);
   const [localVal, setLocalVal] = useState(node.value);
   const ref = useRef<HTMLDivElement>(null);
@@ -1004,7 +1003,7 @@ function NodeCard({ node, onChange, onOpenChange, growMaxH }: { node: MindNode; 
 
   const renderDropdown = () => {
     if (node.type === "branch") {
-      return WORKSPACES.map(w => (
+      return branches.map(w => (
         <button key={w.id} onClick={() => { onChange(w.name); setOpenWithCb(false); }}
           className="flex w-full items-center gap-2.5 px-3 py-2.5 text-sm text-white/75 transition-colors hover:bg-white/8 hover:text-white">
           <span className="h-2 w-2 flex-shrink-0 rounded-full" style={{ background: w.accent }} />

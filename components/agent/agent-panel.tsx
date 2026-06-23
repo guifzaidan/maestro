@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import { PageTransition } from "@/components/shell/page-transition";
 import { Topbar } from "@/components/shell/topbar";
 import { GlassCard } from "@/components/ui/primitives";
@@ -14,8 +14,7 @@ import { cn } from "@/lib/utils";
 type Phase = "idle" | "running" | "done";
 
 export function AgentPanel() {
-  const { active } = useWorkspace();
-  const ws = getWorkspace(active);
+  const { active, activeWorkspace: ws } = useWorkspace();
 
   const [prompt, setPrompt] = useState("");
   const [phase, setPhase] = useState<Phase>("idle");

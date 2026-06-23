@@ -24,8 +24,9 @@ export interface SaveConnectionInput {
   connected?: boolean;
 }
 
-export async function fetchConnections(): Promise<ConnectionDTO[]> {
-  const res = await fetch("/api/connections");
+export async function fetchConnections(workspace?: string): Promise<ConnectionDTO[]> {
+  const url = workspace ? `/api/connections?workspace=${encodeURIComponent(workspace)}` : "/api/connections";
+  const res = await fetch(url);
   const data = await res.json();
   return data.connections ?? [];
 }

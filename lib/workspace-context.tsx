@@ -8,14 +8,18 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { WORKSPACES, getWorkspace, type WorkspaceId } from "./theme";
+import { WORKSPACES, getWorkspace, setBranchCache, type Workspace } from "./theme";
 
 interface WorkspaceContextValue {
-  active: WorkspaceId;
-  setActive: (id: WorkspaceId) => void;
+  active: string;
+  setActive: (id: string) => void;
+  /** Branches carregadas do DB (fallback estático enquanto carrega). */
+  branches: Workspace[];
+  /** Workspace ativa resolvida — conveniente para evitar chamadas a getWorkspace(active). */
+  activeWorkspace: Workspace;
   /** "all" = visão unificada de todos os contextos */
-  scope: WorkspaceId | "all";
-  setScope: (s: WorkspaceId | "all") => void;
+  scope: string | "all";
+  setScope: (s: string | "all") => void;
   hideContextSwitcher: boolean;
   setHideContextSwitcher: (v: boolean) => void;
   allBranches: boolean;
@@ -25,22 +29,52 @@ interface WorkspaceContextValue {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [active, setActive] = useState<WorkspaceId>("dux");
-  const [scope, setScope] = useState<WorkspaceId | "all">("all");
+  const [active, setActive] = useState<string>("dux");
+  const [scope, setScope] = useState<string | "all">("all");
   const [hideContextSwitcher, setHideContextSwitcher] = useState(false);
   const [allBranches, setAllBranches] = useState(false);
+  const [branches, setBranches] = useState<Workspace[]>(WORKSPACES);
 
+  // Carrega branches do DB e atualiza o cache global para getWorkspace().
   useEffect(() => {
-    const ws = getWorkspace(active);
+    fetch("/api/branches")
+      .then((r) => r.json())
+      .then((data: { branches?: Workspace[] }) => {
+        if (Array.isArray(data.branches) && data.branches.length > 0) {
+          setBranches(data.branches);
+          setBranchCache(data.branches);
+        }
+      })
+      .catch(() => {/* silencia erros de rede; usa fallback estático */});
+  }, []);
+
+  const activeWorkspace = useMemo(
+    () => branches.find((w) => w.id === active) ?? branches[0] ?? WORKSPACES[0],
+    [active, branches],
+  );
+
+  // Aplica accent vars no :root sempre que branch ou lista mudar.
+  useEffect(() => {
     const root = document.documentElement;
-    root.style.setProperty("--accent", ws.accent);
-    root.style.setProperty("--accent-2", ws.accent2);
-    root.style.setProperty("--accent-soft", ws.accentSoft);
-  }, [active]);
+    root.style.setProperty("--accent", activeWorkspace.accent);
+    root.style.setProperty("--accent-2", activeWorkspace.accent2);
+    root.style.setProperty("--accent-soft", activeWorkspace.accentSoft);
+  }, [activeWorkspace]);
 
   const value = useMemo(
-    () => ({ active, setActive, scope, setScope, hideContextSwitcher, setHideContextSwitcher, allBranches, setAllBranches }),
-    [active, scope, hideContextSwitcher, allBranches],
+    () => ({
+      active,
+      setActive,
+      branches,
+      activeWorkspace,
+      scope,
+      setScope,
+      hideContextSwitcher,
+      setHideContextSwitcher,
+      allBranches,
+      setAllBranches,
+    }),
+    [active, branches, activeWorkspace, scope, hideContextSwitcher, allBranches],
   );
 
   return (

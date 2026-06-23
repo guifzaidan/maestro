@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { DatePicker } from "@/components/ui/date-picker";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
-import { useWorkspace, getWorkspace, WORKSPACES } from "@/lib/workspace-context";
+import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { WorkspaceDot } from "@/components/shell/header";
 import { PageTransition } from "@/components/shell/page-transition";
 import { Topbar } from "@/components/shell/topbar";
@@ -11,7 +11,6 @@ import { Icon } from "@/components/ui/icon";
 import { Loader } from "@/components/ui/loader";
 import { useToast } from "@/components/ui/toast";
 import { TASK_LISTS, TODAY_LIST, type Task, type TaskList } from "@/lib/mock/tasks";
-import type { WorkspaceId } from "@/lib/theme";
 import { cn } from "@/lib/utils";
 
 type View = "hoje" | "semana" | "mes" | "backlog";
@@ -86,7 +85,7 @@ function toBoardTask(row: DbTaskRow): Task {
   return {
     id: row.id,
     title: row.title,
-    workspace: row.workspace as WorkspaceId,
+    workspace: row.workspace,
     list,
     done: row.done,
     due: row.due ?? undefined,
@@ -167,7 +166,7 @@ export function TaskBoard() {
     toast("Tarefa atualizada", "edit");
   };
 
-  const saveTaskEdit = (id: string, fields: { title: string; due?: string; description?: string; workspace?: WorkspaceId }) => {
+  const saveTaskEdit = (id: string, fields: { title: string; due?: string; description?: string; workspace?: string }) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...fields } : t)));
     setEditTarget(null);
     fetch("/api/tasks", {
@@ -789,13 +788,14 @@ const FIELD_STYLE = {
 
 function EditTaskModal({ task, onSave, onCancel }: {
   task: Task;
-  onSave: (fields: { title: string; due?: string; description?: string; workspace?: WorkspaceId }) => void;
+  onSave: (fields: { title: string; due?: string; description?: string; workspace?: string }) => void;
   onCancel: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [due, setDue] = useState(task.due ?? "");
   const [description, setDescription] = useState(task.description ?? "");
-  const [workspace, setWorkspace] = useState<WorkspaceId>(task.workspace);
+  const { branches } = useWorkspace();
+  const [workspace, setWorkspace] = useState<string>(task.workspace);
   const [calOpen, setCalOpen] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
   const calRef = useRef<HTMLDivElement>(null);
@@ -891,14 +891,14 @@ function EditTaskModal({ task, onSave, onCancel }: {
                   className="absolute left-0 right-0 top-full z-20 mt-2 rounded-xl p-1.5"
                   style={{ background: "rgba(20,20,22,0.98)", border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 24px 60px -12px rgba(0,0,0,0.85)" }}
                 >
-                  {WORKSPACES.map((w) => {
+                  {branches.map((w) => {
                     const isActive = workspace === w.id;
                     return (
                       <motion.button
                         key={w.id}
                         type="button"
                         whileHover={{ x: 3 }}
-                        onClick={() => { setWorkspace(w.id as WorkspaceId); setBranchOpen(false); }}
+                        onClick={() => { setWorkspace(w.id); setBranchOpen(false); }}
                         className={cn(
                           "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] transition-colors",
                           isActive ? "text-white" : "text-white/50 hover:text-white/80"

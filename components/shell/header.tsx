@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { AnimatePresence, motion, useMotionValue, useTransform, useScroll } from "framer-motion";
 import { useState, useEffect } from "react";
-import { useWorkspace, WORKSPACES, getWorkspace } from "@/lib/workspace-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
@@ -16,10 +16,9 @@ const NAV = [
 
 export function Header() {
   const pathname = usePathname();
-  const { active, setActive, hideContextSwitcher, allBranches, setAllBranches } = useWorkspace();
+  const { active, setActive, hideContextSwitcher, allBranches, setAllBranches, branches, activeWorkspace: ws } = useWorkspace();
   const [open, setOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
-  const ws = getWorkspace(active);
 
   useEffect(() => {
     const onScroll = () => setScrolled(window.scrollY > 12);
@@ -141,7 +140,7 @@ export function Header() {
                       animate={{ scale: 1, opacity: 1 }}
                       exit={{ scale: 0, opacity: 0 }}
                       transition={{ type: "spring", stiffness: 500, damping: 18 }}
-                      title="Todas as branchs ativas"
+                      title="Todas as branches ativas"
                       className="absolute -bottom-0.5 -right-0.5 flex h-3.5 w-3.5 items-center justify-center rounded-full ring-2 ring-[var(--surface-2)]"
                       style={{ background: "linear-gradient(135deg, #f59e0b, #22d3ee 35%, #3b82f6 70%, #a855f7)" }}
                     >
@@ -180,7 +179,7 @@ export function Header() {
                     </p>
 
                     <div className="space-y-0.5">
-                      {WORKSPACES.map((w, i) => {
+                      {branches.map((w, i) => {
                         const isActive = w.id === active;
                         return (
                           <motion.button
@@ -235,7 +234,7 @@ export function Header() {
                         <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full border border-[var(--border-strong)] text-muted">
                           <Icon name="GitPullRequest" size={12} strokeWidth={2} />
                         </span>
-                        <span className="flex-1 text-sm text-muted">Todas as branchs</span>
+                        <span className="flex-1 text-sm text-muted">Todas as branches</span>
                         <AnimatePresence>
                           {allBranches && (
                             <motion.span

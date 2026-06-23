@@ -26,13 +26,13 @@ import { cn } from "@/lib/utils";
  * contexto + contagem de ativas no topo.
  */
 export function ConnectorsList({ withScopeFilter = false }: { withScopeFilter?: boolean }) {
-  const { scope } = useWorkspace();
+  const { scope, active } = useWorkspace();
   const [persisted, setPersisted] = useState<ConnectionDTO[]>([]);
   const [openId, setOpenId] = useState<string | null>(null);
 
   const reload = useCallback(() => {
-    fetchConnections().then(setPersisted).catch(() => {});
-  }, []);
+    fetchConnections(active).then(setPersisted).catch(() => {});
+  }, [active]);
 
   useEffect(() => { reload(); }, [reload]);
 
@@ -40,8 +40,10 @@ export function ConnectorsList({ withScopeFilter = false }: { withScopeFilter?: 
     withScopeFilter && scope !== "all" ? CONNECTORS.filter((c) => c.scopes.includes(scope)) : CONNECTORS;
 
   // DB é a fonte da verdade quando há registro; senão cai no estado mock.
+  // IDs de conexões não-DB são compostos: `${connectorId}--${workspace}`.
   const isConnected = (c: Connector) => {
-    const row = persisted.find((p) => p.id === c.id);
+    if (c.category === "db") return false;
+    const row = persisted.find((p) => p.id === `${c.id}--${active}`);
     return row ? row.connected : c.connected;
   };
   const connected = visible.filter(isConnected).length;
@@ -70,11 +72,12 @@ export function ConnectorsList({ withScopeFilter = false }: { withScopeFilter?: 
           >
             <ConnectorCard
               connector={c}
-              self={persisted.find((p) => p.id === c.id)}
-              tursoRows={persisted.filter((p) => p.connector === "turso" && p.id !== c.id)}
+              self={c.category !== "db" ? persisted.find((p) => p.id === `${c.id}--${active}`) : undefined}
+              tursoRows={persisted.filter((p) => p.connector === "turso")}
               open={openId === c.id}
               onToggle={() => setOpenId(openId === c.id ? null : c.id)}
               onChanged={reload}
+              workspace={active}
             />
           </motion.div>
         ))}
@@ -90,6 +93,7 @@ function ConnectorCard({
   open,
   onToggle,
   onChanged,
+  workspace,
 }: {
   connector: Connector;
   self?: ConnectionDTO;
@@ -97,6 +101,7 @@ function ConnectorCard({
   open: boolean;
   onToggle: () => void;
   onChanged: () => void;
+  workspace: string;
 }) {
   const { toast } = useToast();
   const [connected, setConnected] = useState(self?.connected ?? connector.connected);
@@ -113,8 +118,9 @@ function ConnectorCard({
     setSaving(true);
     try {
       await saveConnection({
-        id: connector.id,
+        id: `${connector.id}--${workspace}`,
         connector: connector.id,
+        workspace,
         connected: nextConnected,
         secret: cred || undefined,
       });
@@ -300,6 +306,7 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
       await saveConnection({
         id,
         connector: "turso",
+        workspace: active,
         name: c.name,
         config: { url: c.url, tables: c.selected, mappings: c.mappings },
         secret: tokens[id] || undefined,

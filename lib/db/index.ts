@@ -21,10 +21,23 @@ export function ensureSchema() {
     schemaReady = (async () => {
       await client.batch(
         [
+          // Branches — fonte de verdade para contextos/workspaces.
+          `CREATE TABLE IF NOT EXISTS branches (
+            id          TEXT PRIMARY KEY,
+            name        TEXT NOT NULL,
+            short       TEXT NOT NULL,
+            icon        TEXT NOT NULL,
+            accent      TEXT NOT NULL,
+            accent2     TEXT NOT NULL,
+            accent_soft TEXT NOT NULL,
+            tagline     TEXT,
+            sort        INTEGER NOT NULL DEFAULT 0,
+            created_at  INTEGER NOT NULL
+          )`,
           `CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
-            workspace TEXT NOT NULL,
+            workspace TEXT NOT NULL REFERENCES branches(id),
             list TEXT,
             done INTEGER NOT NULL DEFAULT 0,
             due TEXT,
@@ -34,7 +47,7 @@ export function ensureSchema() {
           )`,
           `CREATE TABLE IF NOT EXISTS agent_runs (
             id TEXT PRIMARY KEY,
-            workspace TEXT NOT NULL,
+            workspace TEXT NOT NULL REFERENCES branches(id),
             status TEXT NOT NULL,
             created_at INTEGER NOT NULL
           )`,
@@ -48,7 +61,7 @@ export function ensureSchema() {
           `CREATE TABLE IF NOT EXISTS connections (
             id TEXT PRIMARY KEY,
             connector TEXT NOT NULL,
-            workspace TEXT,
+            workspace TEXT REFERENCES branches(id),
             name TEXT,
             config TEXT,
             secret TEXT,
@@ -56,6 +69,19 @@ export function ensureSchema() {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
           )`,
+        ],
+        "write",
+      );
+
+      // Seed dos 3 branches iniciais — INSERT OR IGNORE para ser idempotente.
+      await client.batch(
+        [
+          `INSERT OR IGNORE INTO branches (id, name, short, icon, accent, accent2, accent_soft, tagline, sort, created_at)
+           VALUES ('dux', 'DUX', 'DX', 'Circle', '#f59e0b', '#f97316', 'rgba(245, 158, 11, 0.18)', 'Token Claude · DUX', 0, 1700000000000)`,
+          `INSERT OR IGNORE INTO branches (id, name, short, icon, accent, accent2, accent_soft, tagline, sort, created_at)
+           VALUES ('sheep', 'Sheep Tech', 'ST', 'X', '#10b981', '#22d3ee', 'rgba(16, 185, 129, 0.18)', 'Token Claude · Sheep', 1, 1700000000001)`,
+          `INSERT OR IGNORE INTO branches (id, name, short, icon, accent, accent2, accent_soft, tagline, sort, created_at)
+           VALUES ('pessoal', 'Pessoal', 'P', 'Triangle', '#3b82f6', '#06b6d4', 'rgba(59, 130, 246, 0.18)', 'Token do orquestrador', 2, 1700000000002)`,
         ],
         "write",
       );

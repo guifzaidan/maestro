@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { listConnections, upsertConnection, deleteConnection } from "@/lib/db/connections";
 
-export async function GET() {
-  const all = await listConnections();
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url);
+  const workspace = searchParams.get("workspace") ?? undefined;
+  const all = await listConnections(workspace);
   return NextResponse.json({ connections: all });
 }
 

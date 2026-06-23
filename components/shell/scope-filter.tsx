@@ -1,15 +1,15 @@
 "use client";
 
-import { useWorkspace, WORKSPACES } from "@/lib/workspace-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import { Dot } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 
 export function ScopeFilter() {
-  const { scope, setScope } = useWorkspace();
+  const { scope, setScope, branches } = useWorkspace();
 
   const options = [
     { id: "all" as const, label: "Todos", color: "#e4e4e7" },
-    ...WORKSPACES.map((w) => ({ id: w.id, label: w.name, color: w.accent })),
+    ...branches.map((w) => ({ id: w.id, label: w.name, color: w.accent })),
   ];
 
   return (

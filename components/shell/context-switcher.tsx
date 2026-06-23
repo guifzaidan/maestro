@@ -2,14 +2,14 @@
 
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { useWorkspace, WORKSPACES, getWorkspace } from "@/lib/workspace-context";
+import { useWorkspace } from "@/lib/workspace-context";
 import { Icon } from "@/components/ui/icon";
 import { cn } from "@/lib/utils";
 
 export function ContextSwitcher() {
-  const { active, setActive } = useWorkspace();
+  const { active, setActive, branches, activeWorkspace } = useWorkspace();
   const [open, setOpen] = useState(false);
-  const current = getWorkspace(active);
+  const current = activeWorkspace;
 
   return (
     <div className="relative">
@@ -44,7 +44,7 @@ export function ContextSwitcher() {
               <p className="px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-muted-2">
                 Branch ativo
               </p>
-              {WORKSPACES.map((w) => {
+              {branches.map((w) => {
                 const isActive = w.id === active;
                 return (
                   <button

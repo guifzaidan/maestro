@@ -1,4 +1,4 @@
-import { eq } from "drizzle-orm";
+import { eq, or, isNull } from "drizzle-orm";
 import { db, ensureSchema } from "./index";
 import { connections, type Connection } from "./schema";
 import { encryptSecret, decryptSecret } from "../crypto";
@@ -31,9 +31,11 @@ function toDTO(row: Connection): ConnectionDTO {
   };
 }
 
-export async function listConnections(): Promise<ConnectionDTO[]> {
+export async function listConnections(workspace?: string): Promise<ConnectionDTO[]> {
   await ensureSchema();
-  const rows = await db.select().from(connections);
+  const rows = workspace
+    ? await db.select().from(connections).where(or(eq(connections.workspace, workspace), isNull(connections.workspace)))
+    : await db.select().from(connections);
   return rows.map(toDTO);
 }
 

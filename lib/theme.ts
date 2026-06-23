@@ -2,9 +2,12 @@
  * Workspace identities. Each context (empresa) has its own accent color +
  * gradient + icon. The active workspace re-tints the whole UI via CSS vars
  * (see WorkspaceProvider).
+ *
+ * WorkspaceId is `string` — branches are dynamic and stored in DB.
+ * WORKSPACES is the static seed / SSR fallback until the DB responds.
  */
 
-export type WorkspaceId = "dux" | "sheep" | "pessoal";
+export type WorkspaceId = string;
 
 export interface Workspace {
   id: WorkspaceId;
@@ -16,7 +19,7 @@ export interface Workspace {
   accent2: string;
   accentSoft: string;
   /** Description shown in switcher / settings */
-  tagline: string;
+  tagline: string | null;
 }
 
 export const WORKSPACES: Workspace[] = [
@@ -52,11 +55,20 @@ export const WORKSPACES: Workspace[] = [
   },
 ];
 
-export const WORKSPACE_MAP: Record<WorkspaceId, Workspace> = WORKSPACES.reduce(
+export const WORKSPACE_MAP: Record<string, Workspace> = WORKSPACES.reduce(
   (acc, w) => ({ ...acc, [w.id]: w }),
-  {} as Record<WorkspaceId, Workspace>,
+  {} as Record<string, Workspace>,
 );
 
-export function getWorkspace(id: WorkspaceId): Workspace {
-  return WORKSPACE_MAP[id];
+// Cache mutable: atualizado pelo WorkspaceProvider quando branches carregam do DB.
+let _cache: Workspace[] = WORKSPACES;
+
+/** Atualiza o cache de branches — chamado pelo WorkspaceProvider após fetch. */
+export function setBranchCache(list: Workspace[]) {
+  _cache = list;
+}
+
+/** Busca workspace pelo id. Usa o cache (DB-loaded) com fallback estático. */
+export function getWorkspace(id: string): Workspace {
+  return _cache.find((w) => w.id === id) ?? _cache[0] ?? WORKSPACES[0];
 }
