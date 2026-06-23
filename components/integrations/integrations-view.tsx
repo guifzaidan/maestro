@@ -130,8 +130,7 @@ function ConnectorCard({
   };
 
   return (
-    <div className={cn("rounded-2xl", connected && "glow")}>
-    <div className="glass rounded-2xl overflow-hidden">
+    <div className={cn("glass rounded-2xl overflow-hidden", connected && "glow")}>
       {/* Row */}
       <button
         onClick={onToggle}
@@ -231,7 +230,6 @@ function ConnectorCard({
           </motion.div>
         )}
       </AnimatePresence>
-    </div>
     </div>
   );
 }

@@ -16,6 +16,58 @@ import { cn } from "@/lib/utils";
 
 type View = "hoje" | "semana" | "mes" | "backlog";
 
+let _audioCtx: AudioContext | null = null;
+function getAudioCtx(): AudioContext {
+  if (!_audioCtx || _audioCtx.state === "closed") {
+    const AC = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    _audioCtx = new AC();
+  }
+  return _audioCtx;
+}
+
+function playBell(direction: "up" | "down" = "up") {
+  try {
+    const ctx = getAudioCtx();
+    const fire = () => {
+      const t = ctx.currentTime;
+      // harp pluck: arpejo C4–E4–G4 (uma oitava abaixo = mais grave/suave).
+      // "up" (marcar) toca ascendente; "down" (desmarcar) toca descendente.
+      const freqs = [261.63, 329.63, 392.0];
+      const ordered = direction === "up" ? freqs : [...freqs].reverse();
+      const strings: [number, number][] = ordered.map((f, i) => [f, i * 0.07]);
+      strings.forEach(([fund, delay]) => {
+        // harmônicos: [ratio, volume, decay] — parciais altos bem reduzidos
+        // para um timbre arredondado, menos brilhante/agudo.
+        const partials: [number, number, number][] = [
+          [1,   0.16, 1.3],
+          [2,   0.05, 0.55],
+          [3,   0.02, 0.30],
+          [4,   0.008, 0.18],
+        ];
+        partials.forEach(([ratio, vol, dec]) => {
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.connect(gain);
+          gain.connect(ctx.destination);
+          osc.type = "sine";
+          // leve pitch drop inicial — característico de corda pinçada
+          osc.frequency.setValueAtTime(fund * ratio * 1.003, t + delay);
+          osc.frequency.exponentialRampToValueAtTime(fund * ratio, t + delay + 0.04);
+          gain.gain.setValueAtTime(vol, t + delay);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t + delay + dec);
+          osc.start(t + delay);
+          osc.stop(t + delay + dec);
+        });
+      });
+    };
+    if (ctx.state === "suspended") {
+      ctx.resume().then(fire);
+    } else {
+      fire();
+    }
+  } catch {}
+}
+
 const VALID_LISTS: TaskList[] = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"];
 
 interface DbTaskRow {
@@ -77,12 +129,14 @@ export function TaskBoard() {
   }, []);
 
   const toggle = (id: string) => {
-    let next = false;
-    setTasks((prev) => prev.map((t) => {
-      if (t.id !== id) return t;
-      next = !t.done;
-      return { ...t, done: next };
-    }));
+    // Calcula 'next' de forma determinística a partir do estado atual —
+    // não dentro do updater do setState (que pode rodar de forma assíncrona).
+    const current = tasks.find((t) => t.id === id);
+    if (!current) return;
+    const next = !current.done;
+    playBell(next ? "up" : "down");
+    if (next) toast("Tarefa concluída", "success");
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, done: next } : t)));
     fetch("/api/tasks", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
@@ -1006,31 +1060,24 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         className="shrink-0 cursor-pointer"
         aria-label="toggle"
       >
-        <AnimatePresence mode="wait" initial={false}>
-          {task.done ? (
-            <motion.span
-              key="done"
-              initial={{ scale: 0, rotate: -90 }}
-              animate={{ scale: 1, rotate: 0 }}
-              exit={{ scale: 0 }}
-              transition={{ type: "spring", stiffness: 500, damping: 20 }}
-              className="flex h-[18px] w-[18px] items-center justify-center rounded-full"
-              style={{ background: ws.accent }}
-            >
-              <Icon name="Check" size={11} strokeWidth={2.5} className="text-white" />
-            </motion.span>
-          ) : (
-            <motion.span
-              key="undone"
-              initial={{ scale: 0 }}
-              animate={{ scale: 1 }}
-              exit={{ scale: 0 }}
-              whileHover={{ borderColor: ws.accent, scale: 1.1 }}
-              transition={{ duration: 0.12 }}
-              className="block h-[18px] w-[18px] rounded-full border border-[var(--border-strong)]"
-            />
-          )}
-        </AnimatePresence>
+        <div className="relative h-[18px] w-[18px]">
+          <span className="block h-full w-full rounded-full border border-[var(--border-strong)]" />
+          <AnimatePresence initial={false}>
+            {task.done && (
+              <motion.span
+                key="done"
+                initial={{ scale: 0, rotate: -90 }}
+                animate={{ scale: 1, rotate: 0 }}
+                exit={{ scale: 0, rotate: -90 }}
+                transition={{ type: "spring", stiffness: 500, damping: 20 }}
+                className="absolute inset-0 flex items-center justify-center rounded-full"
+                style={{ background: ws.accent }}
+              >
+                <Icon name="Check" size={11} strokeWidth={2.5} className="text-white" />
+              </motion.span>
+            )}
+          </AnimatePresence>
+        </div>
       </button>
 
       <span

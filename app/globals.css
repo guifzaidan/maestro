@@ -40,6 +40,10 @@ html {
   scrollbar-gutter: stable;
 }
 
+*:focus {
+  outline: none;
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
@@ -107,29 +111,7 @@ body {
 
 /* Accent glow ring (active context / focused card) ------------ */
 .glow {
-  position: relative;
-}
-.glow::before {
-  content: "";
-  position: absolute;
-  inset: -1px;
-  border-radius: inherit;
-  padding: 1px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-2));
-  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
-  -webkit-mask-composite: xor;
-  mask-composite: exclude;
-  opacity: 0.45;
-  pointer-events: none;
-}
-.glow::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  box-shadow: 0 0 20px -6px var(--accent);
-  opacity: 0.2;
-  pointer-events: none;
+  border-color: var(--accent) !important;
 }
 
 .text-muted { color: var(--muted); }
