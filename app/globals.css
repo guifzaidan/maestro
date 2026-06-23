@@ -1,26 +1,200 @@
 @import "tailwindcss";
 
+/* ============================================================
+   Hub Orquestrador — Design System (dark frosted glass)
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #070708;
+  --foreground: #ededed;
+
+  /* Surfaces */
+  --surface: rgba(255, 255, 255, 0.03);
+  --surface-2: rgba(255, 255, 255, 0.05);
+  --surface-hover: rgba(255, 255, 255, 0.07);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  /* Text */
+  --muted: rgba(237, 237, 237, 0.55);
+  --muted-2: rgba(237, 237, 237, 0.38);
+
+  /* Active workspace accent (overridden at runtime by WorkspaceProvider) */
+  --accent: #6366f1;
+  --accent-2: #3b82f6;
+  --accent-soft: rgba(99, 102, 241, 0.15);
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --radius-card: 18px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html {
+  background: var(--background);
+  scrollbar-gutter: stable;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
+
+/* Starfield / nebula backdrop ---------------------------------- */
+.app-bg {
+  position: relative;
+  isolation: isolate;
+}
+.app-bg::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -2;
+  background:
+    radial-gradient(1px 1px at 20% 30%, rgba(255, 255, 255, 0.35), transparent),
+    radial-gradient(1px 1px at 70% 60%, rgba(255, 255, 255, 0.25), transparent),
+    radial-gradient(1.5px 1.5px at 40% 80%, rgba(255, 255, 255, 0.2), transparent),
+    radial-gradient(1px 1px at 85% 20%, rgba(255, 255, 255, 0.25), transparent),
+    radial-gradient(1px 1px at 50% 50%, rgba(255, 255, 255, 0.15), transparent),
+    radial-gradient(1px 1px at 10% 70%, rgba(255, 255, 255, 0.2), transparent);
+  background-size: 100% 100%;
+  opacity: 0.6;
+}
+.app-bg::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  top: -10%;
+  left: 50%;
+  width: 70vw;
+  height: 50vh;
+  transform: translateX(-50%);
+  background: radial-gradient(
+    closest-side,
+    var(--accent-soft),
+    transparent 70%
+  );
+  filter: blur(60px);
+  opacity: 0.5;
+  transition: background 0.6s ease;
+  pointer-events: none;
+}
+
+/* Glass surfaces ---------------------------------------------- */
+.glass {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow:
+    0 1px 0 0 rgba(255, 255, 255, 0.04) inset,
+    0 20px 50px -20px rgba(0, 0, 0, 0.7);
+}
+.glass-hover {
+  transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
+}
+.glass-hover:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+/* Accent glow ring (active context / focused card) ------------ */
+.glow {
+  position: relative;
+}
+.glow::before {
+  content: "";
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(135deg, var(--accent), var(--accent-2));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  opacity: 0.9;
+  pointer-events: none;
+}
+.glow::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: 0 0 28px -4px var(--accent);
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+.text-muted { color: var(--muted); }
+.text-muted-2 { color: var(--muted-2); }
+
+/* Scrollbar --------------------------------------------------- */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.16); background-clip: padding-box; }
+
+@keyframes thinking {
+  0%, 80%, 100% { opacity: 0.2; transform: translateY(0); }
+  40% { opacity: 1; transform: translateY(-2px); }
+}
+
+/* Nebula blob breathes */
+@keyframes nebula-breathe {
+  0%, 100% { opacity: 0.4; transform: translateX(-50%) scale(1); }
+  50%       { opacity: 0.65; transform: translateX(-50%) scale(1.15); }
+}
+.app-bg::after {
+  animation: nebula-breathe 7s ease-in-out infinite;
+}
+
+/* Pulse ring for status dots */
+@keyframes pulse-ring {
+  0%   { transform: scale(1);   opacity: 0.7; }
+  70%  { transform: scale(2.4); opacity: 0; }
+  100% { transform: scale(2.4); opacity: 0; }
+}
+.pulse-dot {
+  position: relative;
+  display: inline-block;
+}
+.pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse-ring 2s ease-out infinite;
+}
+
+/* Shimmer on glass card hover */
+@keyframes shimmer {
+  0%   { transform: translateX(-100%) skewX(-12deg); }
+  100% { transform: translateX(200%)  skewX(-12deg); }
+}
+
+/* Smooth underline nav indicator */
+@keyframes slide-in {
+  from { opacity: 0; transform: scaleX(0.6); }
+  to   { opacity: 1; transform: scaleX(1); }
+}
+
+/* Check mark draw */
+@keyframes check-pop {
+  0%   { transform: scale(0) rotate(-15deg); }
+  60%  { transform: scale(1.25) rotate(5deg); }
+  100% { transform: scale(1) rotate(0deg); }
+}
+.check-pop { animation: check-pop 0.28s cubic-bezier(.34,1.56,.64,1) forwards; }
