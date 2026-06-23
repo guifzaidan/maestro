@@ -47,3 +47,18 @@ export async function removeConnection(id: string): Promise<void> {
     body: JSON.stringify({ id }),
   });
 }
+
+export interface IntrospectedColumn { name: string; type: string; pk: boolean }
+export interface IntrospectedTable { name: string; columns: IntrospectedColumn[]; rowCount: number | null }
+
+/** Lista as tabelas de um banco Turso (por conexão salva `id` ou `url`+`token`). */
+export async function introspectConnection(
+  input: { id?: string; url?: string; token?: string },
+): Promise<{ tables?: IntrospectedTable[]; error?: string }> {
+  const res = await fetch("/api/connections/introspect", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  return res.json();
+}

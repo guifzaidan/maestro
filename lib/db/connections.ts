@@ -102,3 +102,16 @@ export async function getConnectionSecret(id: string): Promise<string | null> {
   if (!row?.secret) return null;
   return decryptSecret(row.secret);
 }
+
+/**
+ * Uso server-side: url + token (decifrado) de uma conexão Turso salva, para
+ * abrir o banco externo e introspeccionar/sincronizar. Nunca exponha ao cliente.
+ */
+export async function getConnectionTarget(id: string): Promise<{ url: string; token: string | null } | null> {
+  await ensureSchema();
+  const row = (await db.select().from(connections).where(eq(connections.id, id)))[0];
+  if (!row) return null;
+  const url = row.config ? ((JSON.parse(row.config) as { url?: string }).url ?? "") : "";
+  const token = row.secret ? decryptSecret(row.secret) : null;
+  return { url, token };
+}

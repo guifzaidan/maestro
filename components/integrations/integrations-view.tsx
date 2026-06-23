@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { PageTransition } from "@/components/shell/page-transition";
@@ -14,7 +14,9 @@ import {
   fetchConnections,
   saveConnection,
   removeConnection,
+  introspectConnection,
   type ConnectionDTO,
+  type IntrospectedTable,
 } from "@/lib/connections-client";
 import { cn } from "@/lib/utils";
 
@@ -240,7 +242,8 @@ function ConnectorCard({
   );
 }
 
-type DbRow = { id: string; name: string; url: string; hasSecret: boolean; persisted: boolean };
+type DbRow = { id: string; name: string; url: string; hasSecret: boolean; persisted: boolean; selected: string[] };
+type TablesState = { loading: boolean; error: string | null; tables: IntrospectedTable[] };
 
 function rowsFromDTO(rows: ConnectionDTO[]): DbRow[] {
   return rows.map((r) => ({
@@ -249,6 +252,7 @@ function rowsFromDTO(rows: ConnectionDTO[]): DbRow[] {
     url: (r.config?.url as string) ?? "",
     hasSecret: r.hasSecret,
     persisted: true,
+    selected: Array.isArray(r.config?.tables) ? (r.config!.tables as string[]) : [],
   }));
 }
 
@@ -257,31 +261,41 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
   const [conns, setConns] = useState<DbRow[]>(() => rowsFromDTO(rows));
   // segredo (token) digitado por linha — só em memória até salvar
   const [tokens, setTokens] = useState<Record<string, string>>({});
+  // tabelas introspeccionadas por conexão
+  const [tablesByConn, setTablesByConn] = useState<Record<string, TablesState>>({});
+  // seleção corrente por conexão — ref síncrono para evitar corrida em cliques rápidos
+  const selRef = useRef<Record<string, string[]>>({});
 
   // Recarrega a lista quando a fonte persistida muda.
-  useEffect(() => { setConns(rowsFromDTO(rows)); }, [rows]);
+  useEffect(() => {
+    const next = rowsFromDTO(rows);
+    setConns(next);
+    next.forEach((r) => { selRef.current[r.id] = r.selected; });
+  }, [rows]);
 
   const add = () => {
     const id = crypto.randomUUID();
-    setConns((prev) => [...prev, { id, name: "", url: "", hasSecret: false, persisted: false }]);
+    selRef.current[id] = [];
+    setConns((prev) => [...prev, { id, name: "", url: "", hasSecret: false, persisted: false, selected: [] }]);
   };
 
   const setField = (id: string, field: "name" | "url", value: string) =>
     setConns((prev) => prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)));
 
-  const save = async (id: string) => {
-    const c = conns.find((x) => x.id === id);
-    if (!c) return;
-    if (!c.name && !c.url && !tokens[id]) return; // nada pra salvar
+  const save = async (id: string, override?: Partial<DbRow>) => {
+    const base = conns.find((x) => x.id === id);
+    if (!base) return;
+    const c = { ...base, ...override };
+    if (!c.name && !c.url && !tokens[id] && c.selected.length === 0) return; // nada pra salvar
     try {
       await saveConnection({
         id,
         connector: "turso",
         name: c.name,
-        config: { url: c.url },
+        config: { url: c.url, tables: c.selected },
         secret: tokens[id] || undefined,
       });
-      setConns((prev) => prev.map((x) => (x.id === id ? { ...x, persisted: true, hasSecret: x.hasSecret || !!tokens[id] } : x)));
+      setConns((prev) => prev.map((x) => (x.id === id ? { ...c, persisted: true, hasSecret: x.hasSecret || !!tokens[id] } : x)));
       setTokens((prev) => ({ ...prev, [id]: "" }));
       onChanged();
     } catch {
@@ -295,6 +309,36 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
     if (c?.persisted) {
       try { await removeConnection(id); onChanged(); toast("Conexão removida", "delete"); } catch { /* ignore */ }
     }
+  };
+
+  const loadTables = async (id: string) => {
+    setTablesByConn((p) => ({ ...p, [id]: { loading: true, error: null, tables: p[id]?.tables ?? [] } }));
+    const token = tokens[id];
+    const res = await introspectConnection(token ? { id, token } : { id });
+    if (res.error) {
+      setTablesByConn((p) => ({ ...p, [id]: { loading: false, error: res.error!, tables: [] } }));
+      toast("Falha ao ler tabelas", "delete");
+    } else {
+      setTablesByConn((p) => ({ ...p, [id]: { loading: false, error: null, tables: res.tables ?? [] } }));
+    }
+  };
+
+  // Aplica nova seleção a partir do ref síncrono (robusto a cliques rápidos).
+  const applySelection = (id: string, selected: string[]) => {
+    selRef.current[id] = selected;
+    setConns((prev) => prev.map((c) => (c.id === id ? { ...c, selected } : c)));
+    save(id, { selected });
+  };
+
+  const toggleTable = (id: string, table: string) => {
+    const cur = selRef.current[id] ?? [];
+    applySelection(id, cur.includes(table) ? cur.filter((t) => t !== table) : [...cur, table]);
+  };
+
+  const toggleAll = (id: string, allNames: string[]) => {
+    const cur = selRef.current[id] ?? [];
+    const allSelected = allNames.length > 0 && allNames.every((n) => cur.includes(n));
+    applySelection(id, allSelected ? [] : allNames);
   };
 
   return (
@@ -357,10 +401,97 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
                   className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-muted-2"
                 />
               </div>
+
+              {/* Tabelas — só após a conexão ter url + token salvos */}
+              {conn.persisted && conn.url && (conn.hasSecret || tokens[conn.id]) && (
+                <TablesPicker
+                  state={tablesByConn[conn.id]}
+                  selected={conn.selected}
+                  onLoad={() => loadTables(conn.id)}
+                  onToggle={(t) => toggleTable(conn.id, t)}
+                  onToggleAll={(names) => toggleAll(conn.id, names)}
+                />
+              )}
             </div>
           </motion.div>
         ))}
       </AnimatePresence>
+    </div>
+  );
+}
+
+function TablesPicker({
+  state,
+  selected,
+  onLoad,
+  onToggle,
+  onToggleAll,
+}: {
+  state: TablesState | undefined;
+  selected: string[];
+  onLoad: () => void;
+  onToggle: (table: string) => void;
+  onToggleAll: (names: string[]) => void;
+}) {
+  const tables = state?.tables ?? [];
+  const names = tables.map((t) => t.name);
+  const allSelected = names.length > 0 && names.every((n) => selected.includes(n));
+
+  return (
+    <div className="border-t border-[var(--border)] pt-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-wider text-muted-2">
+          Tabelas {selected.length > 0 && <span className="text-[var(--accent)]">· {selected.length} selecionada{selected.length > 1 ? "s" : ""}</span>}
+        </span>
+        <button
+          onClick={onLoad}
+          disabled={state?.loading}
+          className="flex items-center gap-1 text-[11px] text-muted transition-colors hover:text-white disabled:opacity-50"
+        >
+          <Icon name="RefreshCcw" size={11} className={state?.loading ? "animate-spin" : ""} />
+          {tables.length > 0 ? "Atualizar" : "Carregar tabelas"}
+        </button>
+      </div>
+
+      {state?.error && <p className="mt-1.5 text-[11px] text-rose-400">{state.error}</p>}
+
+      {tables.length > 0 && (
+        <div className="mt-2 space-y-1">
+          <button
+            onClick={() => onToggleAll(names)}
+            className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.03]"
+          >
+            <span className={cn(
+              "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
+              allSelected ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border-strong)]"
+            )}>
+              {allSelected && <Icon name="Check" size={9} className="text-black" />}
+            </span>
+            <span className="text-[12px] font-medium text-muted">Selecionar todas</span>
+          </button>
+          {tables.map((t) => {
+            const on = selected.includes(t.name);
+            return (
+              <button
+                key={t.name}
+                onClick={() => onToggle(t.name)}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors hover:bg-white/[0.03]"
+              >
+                <span className={cn(
+                  "flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded border",
+                  on ? "border-[var(--accent)] bg-[var(--accent)]" : "border-[var(--border-strong)]"
+                )}>
+                  {on && <Icon name="Check" size={9} className="text-black" />}
+                </span>
+                <span className="flex-1 truncate font-mono text-[12px] text-white/85">{t.name}</span>
+                <span className="shrink-0 text-[10px] text-muted-2">
+                  {t.rowCount ?? "?"} linha{t.rowCount === 1 ? "" : "s"} · {t.columns.length} col
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
