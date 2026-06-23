@@ -355,6 +355,18 @@ function dateForList(list: TaskList): Date {
   return new Date(now.getFullYear(), now.getMonth(), monday + LIST_TO_DAY_OFFSET[list]);
 }
 
+/**
+ * Faz o parse do campo `due` (dd/mm/yyyy, ou range "dd/mm/yyyy – dd/mm/yyyy")
+ * e retorna {year, month, day} usando a data inicial. null se vazio/inválido.
+ */
+function parseDue(due: string | undefined | null): { year: number; month: number; day: number } | null {
+  if (!due) return null;
+  const first = due.split(" – ")[0]?.trim() ?? "";
+  const m = first.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  if (!m) return null;
+  return { day: Number(m[1]), month: Number(m[2]) - 1, year: Number(m[3]) };
+}
+
 function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
   const [selected, setSelected] = useState<number | null>(null);
   const now = new Date();
@@ -375,19 +387,14 @@ function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBra
 
   const selectMonth = (m: number) => { setMonth(m); setYear(dropYear); setSelected(null); setDropdownOpen(false); };
 
-  // Map tasks to day-of-month (mock: use list offset relative to current week start)
+  // Posiciona cada tarefa pelo seu `due` real (dd/mm/yyyy) no mês/ano exibido.
   const tasksByDay: Record<number, Task[]> = {};
-  if (isCurrentMonth) {
-    const weekStart = todayDate - ((now.getDay() + 6) % 7);
-    tasks.forEach((t) => {
-      const offset = LIST_TO_DAY_OFFSET[t.list];
-      const day = weekStart + offset;
-      if (day >= 1 && day <= daysInMonth) {
-        if (!tasksByDay[day]) tasksByDay[day] = [];
-        tasksByDay[day].push(t);
-      }
-    });
-  }
+  tasks.forEach((t) => {
+    const d = parseDue(t.due);
+    if (!d || d.year !== year || d.month !== month) return;
+    if (d.day < 1 || d.day > daysInMonth) return;
+    (tasksByDay[d.day] ??= []).push(t);
+  });
 
   const selectedTasks = selected ? (tasksByDay[selected] ?? []) : [];
 
