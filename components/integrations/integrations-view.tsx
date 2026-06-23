@@ -116,8 +116,8 @@ function ConnectorCard({
       setCred("");
       onChanged();
       toast(nextConnected ? "Conexão salva" : "Desconectado", nextConnected ? "create" : "delete");
-    } catch {
-      toast("Falha ao salvar", "delete");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Falha ao salvar", "delete");
     } finally {
       setSaving(false);
     }
@@ -301,8 +301,8 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
       setConns((prev) => prev.map((x) => (x.id === id ? { ...c, persisted: true, hasSecret: x.hasSecret || !!tokens[id] } : x)));
       setTokens((prev) => ({ ...prev, [id]: "" }));
       onChanged();
-    } catch {
-      toast("Falha ao salvar conexão", "delete");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Falha ao salvar conexão", "delete");
     }
   };
 

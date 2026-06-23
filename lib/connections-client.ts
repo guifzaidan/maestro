@@ -30,14 +30,17 @@ export async function fetchConnections(): Promise<ConnectionDTO[]> {
   return data.connections ?? [];
 }
 
-export async function saveConnection(input: SaveConnectionInput): Promise<ConnectionDTO | null> {
+export async function saveConnection(input: SaveConnectionInput): Promise<ConnectionDTO> {
   const res = await fetch("/api/connections", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(input),
   });
-  const data = await res.json();
-  return data.connection ?? null;
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.connection) {
+    throw new Error(data.error || `Falha ao salvar conexão (HTTP ${res.status})`);
+  }
+  return data.connection;
 }
 
 export async function removeConnection(id: string): Promise<void> {
