@@ -243,6 +243,9 @@ function ConnectorCard({
   );
 }
 
+/** "tasks" = importa/sincroniza tabelas como tasks. "knowledge" = só a IA consulta. */
+type DbMode = "tasks" | "knowledge";
+
 type DbRow = {
   id: string;
   name: string;
@@ -251,19 +254,26 @@ type DbRow = {
   persisted: boolean;
   selected: string[];
   mappings: Record<string, TableMapping>;
+  mode: DbMode;
 };
 type TablesState = { loading: boolean; error: string | null; tables: IntrospectedTable[] };
 
 function rowsFromDTO(rows: ConnectionDTO[]): DbRow[] {
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name ?? "",
-    url: (r.config?.url as string) ?? "",
-    hasSecret: r.hasSecret,
-    persisted: true,
-    selected: Array.isArray(r.config?.tables) ? (r.config!.tables as string[]) : [],
-    mappings: (r.config?.mappings as Record<string, TableMapping>) ?? {},
-  }));
+  return rows.map((r) => {
+    const selected = Array.isArray(r.config?.tables) ? (r.config!.tables as string[]) : [];
+    // Modo: usa o salvo; sem ele, infere — com tabelas selecionadas era sync de tasks.
+    const mode: DbMode = (r.config?.mode as DbMode) ?? (selected.length > 0 ? "tasks" : "knowledge");
+    return {
+      id: r.id,
+      name: r.name ?? "",
+      url: (r.config?.url as string) ?? "",
+      hasSecret: r.hasSecret,
+      persisted: true,
+      selected,
+      mappings: (r.config?.mappings as Record<string, TableMapping>) ?? {},
+      mode,
+    };
+  });
 }
 
 function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChanged: () => void }) {
@@ -294,11 +304,17 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
     const id = crypto.randomUUID();
     selRef.current[id] = [];
     mapRef.current[id] = {};
-    setConns((prev) => [...prev, { id, name: "", url: "", hasSecret: false, persisted: false, selected: [], mappings: {} }]);
+    // Novas conexões nascem como base de conhecimento (não sincronizam tasks).
+    setConns((prev) => [...prev, { id, name: "", url: "", hasSecret: false, persisted: false, selected: [], mappings: {}, mode: "knowledge" }]);
   };
 
   const setField = (id: string, field: "name" | "url", value: string) =>
     setConns((prev) => prev.map((c) => (c.id === id ? { ...c, [field]: value } : c)));
+
+  const setMode = (id: string, mode: DbMode) => {
+    setConns((prev) => prev.map((c) => (c.id === id ? { ...c, mode } : c)));
+    save(id, { mode });
+  };
 
   const save = async (id: string, override?: Partial<DbRow>) => {
     const base = conns.find((x) => x.id === id);
@@ -311,7 +327,7 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
         connector: "turso",
         branch: active,
         name: c.name,
-        config: { url: c.url, tables: c.selected, mappings: c.mappings },
+        config: { url: c.url, tables: c.selected, mappings: c.mappings, mode: c.mode },
         secret: tokens[id] || undefined,
       });
       setConns((prev) => prev.map((x) => (x.id === id ? { ...c, persisted: true, hasSecret: x.hasSecret || !!tokens[id] } : x)));
@@ -474,8 +490,42 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
                 />
               </div>
 
-              {/* Tabelas — só após a conexão ter url + token salvos */}
+              {/* Modo da conexão — só após salva com url + token */}
               {conn.persisted && conn.url && (conn.hasSecret || tokens[conn.id]) && (
+                <div className="flex gap-1.5 border-t border-[var(--border)] pt-2">
+                  {([
+                    { id: "knowledge", icon: "BookOpen", label: "Base de conhecimento" },
+                    { id: "tasks",     icon: "ListTodo", label: "Sincronizar tasks" },
+                  ] as { id: DbMode; icon: string; label: string }[]).map((m) => {
+                    const on = conn.mode === m.id;
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={() => setMode(conn.id, m.id)}
+                        className={cn(
+                          "flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+                          on ? "text-white" : "border-[var(--border)] text-muted-2 hover:text-white/70",
+                        )}
+                        style={on ? { borderColor: "var(--accent)", background: "color-mix(in srgb, var(--accent) 12%, transparent)" } : undefined}
+                      >
+                        <Icon name={m.icon} size={11} style={on ? { color: "var(--accent)" } : undefined} />
+                        {m.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Base de conhecimento: só nota — a IA consulta via chat, sem sincronizar */}
+              {conn.persisted && conn.url && (conn.hasSecret || tokens[conn.id]) && conn.mode === "knowledge" && (
+                <p className="flex items-center gap-1.5 text-[11px] text-muted-2">
+                  <Icon name="Sparkles" size={11} className="shrink-0" />
+                  A IA consulta esta base via chat quando você pedir. Não cria tasks.
+                </p>
+              )}
+
+              {/* Sincronizar tasks: seleção de tabelas + importação */}
+              {conn.persisted && conn.url && (conn.hasSecret || tokens[conn.id]) && conn.mode === "tasks" && (
                 <TablesPicker
                   state={tablesByConn[conn.id]}
                   selected={conn.selected}
@@ -487,8 +537,8 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
                 />
               )}
 
-              {/* Importar/sincronizar — só com tabelas selecionadas */}
-              {conn.persisted && conn.selected.length > 0 && (
+              {/* Importar/sincronizar — só no modo tasks com tabelas selecionadas */}
+              {conn.persisted && conn.mode === "tasks" && conn.selected.length > 0 && (
                 <div className="flex items-center justify-between border-t border-[var(--border)] pt-2">
                   <span className="text-[10px] text-muted-2">
                     Cria/atualiza tasks vinculadas em <span className="text-[var(--accent)]">{active}</span>

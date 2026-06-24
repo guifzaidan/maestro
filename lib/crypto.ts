@@ -4,11 +4,11 @@ import { join } from "node:path";
 
 /**
  * Criptografia simétrica AES-256-GCM para segredos (tokens Claude, keys de conexão).
- * A chave vem de CONNECTIONS_SECRET (32 bytes em base64/hex) quando definida. Se
- * ausente, é auto-gerada e persistida em `.connections.key` (gitignored) — assim
- * o sistema funciona sem nenhuma configuração manual de env. Os segredos são
- * cifrados antes de ir pro banco e só decifrados no servidor; o cliente nunca
- * recebe o valor em claro.
+ * A chave vem de CONNECTIONS_SECRET (32 bytes em base64/hex). Em dev local, se a
+ * env não estiver setada, é auto-gerada e persistida em `.connections.key`
+ * (gitignored). Em deploy serverless o filesystem é somente-leitura, então a env
+ * CONNECTIONS_SECRET é obrigatória lá. Os segredos são cifrados antes de ir pro
+ * banco e só decifrados no servidor; o cliente nunca recebe o valor em claro.
  *
  * Formato do payload: base64(iv).base64(authTag).base64(ciphertext)
  */
@@ -16,7 +16,12 @@ import { join } from "node:path";
 const KEY_FILE = join(process.cwd(), ".connections.key");
 let cachedKey: Buffer | null = null;
 
-/** Lê a chave do arquivo local ou gera+persiste uma nova (32 bytes). */
+const NO_KEY_MSG =
+  "Criptografia indisponível: defina a env CONNECTIONS_SECRET (32 bytes em base64 ou hex) " +
+  "no ambiente do deploy. Em serverless o filesystem é somente-leitura, então a chave não " +
+  "pode ser gerada em arquivo. Use o MESMO valor do seu .env.local local.";
+
+/** Lê a chave do arquivo local ou gera+persiste uma nova (32 bytes). Só dev local. */
 function fileKey(): Buffer {
   if (existsSync(KEY_FILE)) {
     const raw = readFileSync(KEY_FILE, "utf8").trim();
@@ -24,7 +29,12 @@ function fileKey(): Buffer {
     if (key.length === 32) return key;
   }
   const key = randomBytes(32);
-  writeFileSync(KEY_FILE, key.toString("base64"), { mode: 0o600 });
+  try {
+    writeFileSync(KEY_FILE, key.toString("base64"), { mode: 0o600 });
+  } catch {
+    // Filesystem somente-leitura (ex: Vercel/Lambda) — não dá pra persistir.
+    throw new Error(NO_KEY_MSG);
+  }
   return key;
 }
 
