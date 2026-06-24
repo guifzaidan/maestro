@@ -20,7 +20,7 @@ const BEAMS = [
   { color: "#f97316", left: "46%", angle: -4,  width: 70,  dur: 10, delay: 1.2 },
 ];
 
-interface ChatMessage { id: string; role: "user" | "assistant"; content: string; }
+interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifact"; content: string; artifact?: ArtifactData; }
 interface MindNode   { id: string; label: string; value: string; type: "branch" | "tools" | "deadline" | "text"; }
 interface ArtifactData { filename: string; mime: string; base64: string; bytes: number; format?: string; }
 interface ExecEvent  { id: string; type: "log" | "assistant" | "user" | "done" | "artifact"; content: string; artifact?: ArtifactData; }
@@ -39,16 +39,6 @@ function downloadArtifact(a: ArtifactData) {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-
-const MOCK_INITIAL = "Recebi o áudio! Vou confirmar alguns detalhes antes de iniciar.";
-const MOCK_INITIAL_TEXT = "Olá! Vou te ajudar a estruturar essa tarefa. Preciso de alguns detalhes.";
-const MOCK_QUESTIONS = [
-  "Para qual branch é essa tarefa? Pode ser DUX, Sheep Tech, Pessoal 🎯 ou todas.",
-  "Tem algum prazo definido? Se sim, qual? Caso contrário, posso executar agora.",
-  "Quais ferramentas devo usar? Das conectadas temos Google Drive e Google Sheets.",
-  "Pode descrever com mais detalhes o que precisa ser feito?",
-];
-const MOCK_CLOSE = "Perfeito! Tenho tudo que preciso. Aqui está o plano de ação para sua aprovação:";
 
 type Phase = "idle" | "choosing" | "panel" | "chat" | "confirm" | "executing";
 type InputMode = "text" | "audio";
@@ -69,6 +59,7 @@ export function HubView() {
   const [chatInput, setChatInput] = useState("");
   const [chatStep, setChatStep] = useState(0);
   const [isTyping, setIsTyping] = useState(false);
+  const [chatBusy, setChatBusy] = useState(false);
   const [mindNodes, setMindNodes] = useState<MindNode[]>([]);
   const [execEvents, setExecEvents] = useState<ExecEvent[]>([]);
   const [execInput, setExecInput] = useState("");
@@ -118,8 +109,8 @@ export function HubView() {
 
   // Keep chat input focused (even after sending / maestro reply)
   useEffect(() => {
-    if (phase === "chat" && !isTyping) chatInputRef.current?.focus();
-  }, [phase, isTyping, messages]);
+    if (phase === "chat" && !chatBusy) chatInputRef.current?.focus();
+  }, [phase, chatBusy, messages]);
 
   // Keep execution input focused while running
   useEffect(() => {
@@ -173,7 +164,7 @@ export function HubView() {
           setAudioPhase("done");
           setTimeout(() => {
             setAudioPhase("listening");
-            startChat(MOCK_INITIAL);
+            startAgentChat();
           }, 700);
         }, 2000);
       };
@@ -216,25 +207,81 @@ export function HubView() {
     else if (phase === "panel" && mode === "audio") { if (doAutoSubmitRef.current) doAutoSubmitRef.current(); else closePanel(); }
   };
 
-  const startChat = (intro: string) => {
-    setMessages([]); setChatStep(0); setSelected(null); setInput(""); setLinked([]); setSent(false);
+  /** Abre o chat com o agente REAL. Saudação estática + espera a 1ª mensagem. */
+  const startAgentChat = () => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    agentConvoRef.current = [];
+    agentBufferRef.current = "";
+    setSelected(null); setInput(""); setLinked([]); setSent(false);
+    setChatInput(""); setIsTyping(false); setChatBusy(false);
+    setMessages([{
+      id: "greet",
+      role: "assistant",
+      content: `Olá! Estou no contexto da ${activeWs.name}. Me conta o que você precisa — pode descrever do seu jeito, eu cuido do resto.`,
+    }]);
     setPhase("chat");
+  };
+
+  // Dispara uma rodada do agente no chat: streama texto + ferramentas + artefatos.
+  const runChatTurn = () => {
+    setChatBusy(true);
     setIsTyping(true);
-    setTimeout(() => {
-      setIsTyping(false);
-      setMessages([{ id: "init", role: "assistant", content: intro }]);
-      setIsTyping(true);
-      setTimeout(() => {
+    agentBufferRef.current = "";
+    const assistantId = `a${Date.now()}`;
+    let opened = false;
+    const ensureAssistant = () => {
+      if (!opened) {
+        opened = true;
         setIsTyping(false);
-        setMessages(prev => [...prev, { id: "q0", role: "assistant", content: MOCK_QUESTIONS[0] }]);
-      }, 900);
-    }, 1000);
+        setMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "" }]);
+      }
+    };
+
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    streamAgent(
+      { branch: active, messages: agentConvoRef.current },
+      {
+        onText: (delta) => {
+          agentBufferRef.current += delta;
+          ensureAssistant();
+          setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: agentBufferRef.current } : m));
+        },
+        onToolStart: (e) => {
+          setIsTyping(false);
+          setMessages(prev => [...prev, { id: `t${e.id}`, role: "log", content: `${toolLabel(e.name)}…` }]);
+        },
+        onToolResult: (e) => {
+          const r = e.result as { artifact?: ArtifactData; rowCount?: number; task?: { title?: string } } | undefined;
+          if (e.name === "gerar_artefato" && r?.artifact) {
+            setMessages(prev => [...prev, { id: `art${e.id}`, role: "artifact", content: r.artifact!.filename, artifact: r.artifact }]);
+          }
+        },
+        onDone: () => {
+          abortRef.current = null;
+          setIsTyping(false);
+          setChatBusy(false);
+          if (agentBufferRef.current.trim()) {
+            agentConvoRef.current = [...agentConvoRef.current, { role: "assistant", content: agentBufferRef.current }];
+          }
+        },
+        onError: (msg) => {
+          abortRef.current = null;
+          setIsTyping(false);
+          setChatBusy(false);
+          setMessages(prev => [...prev, { id: `err${Date.now()}`, role: "log", content: `⚠ ${friendlyAgentError(msg)}` }]);
+        },
+      },
+      ctrl.signal,
+    );
   };
 
   const pickMode = (m: InputMode) => {
     setInput(""); setLinked([]); setSent(false); setSelected(null);
     if (m === "audio") { setMode("audio"); setPhase("panel"); setAudioPhase("listening"); }
-    else { setMode("text"); startChat(MOCK_INITIAL_TEXT); }
+    else { setMode("text"); startAgentChat(); }
   };
 
   const closePanel = () => { setPhase("idle"); setSelected(null); setInput(""); setLinked([]); setSent(false); };
@@ -251,35 +298,12 @@ export function HubView() {
   };
 
   const sendChatMessage = () => {
-    if (!chatInput.trim() || isTyping) return;
-    const userMsg: ChatMessage = { id: Date.now().toString(), role: "user", content: chatInput.trim() };
-    const allMsgs = [...messages, userMsg];
-    setMessages(prev => [...prev, userMsg]);
+    if (!chatInput.trim() || chatBusy) return;
+    const text = chatInput.trim();
     setChatInput("");
-    const nextStep = chatStep + 1;
-    setChatStep(nextStep);
-
-    if (nextStep >= MOCK_QUESTIONS.length) {
-      const answers = allMsgs.filter(m => m.role === "user");
-      setMindNodes([
-        { id: "branch",      label: "Branch",      value: answers[0]?.content ?? "", type: "branch" },
-        { id: "deadline",    label: "Prazo",        value: answers[1]?.content ?? "", type: "deadline" },
-        { id: "tools",       label: "Ferramentas",  value: answers[2]?.content ?? "", type: "tools" },
-        { id: "instruction", label: "Instrução",    value: answers[3]?.content ?? "", type: "text" },
-      ]);
-      setIsTyping(true);
-      setTimeout(() => {
-        setIsTyping(false);
-        setMessages(prev => [...prev, { id: "close", role: "assistant", content: MOCK_CLOSE }]);
-        setTimeout(() => setPhase("confirm"), 800);
-      }, 1000);
-    } else {
-      setIsTyping(true);
-      setTimeout(() => {
-        setIsTyping(false);
-        setMessages(prev => [...prev, { id: `q${nextStep}`, role: "assistant", content: MOCK_QUESTIONS[nextStep] }]);
-      }, 1000);
-    }
+    setMessages(prev => [...prev, { id: `u${Date.now()}`, role: "user", content: text }]);
+    agentConvoRef.current = [...agentConvoRef.current, { role: "user", content: text }];
+    runChatTurn();
   };
 
   // Drives one agent turn: streams text + tool events, accumulates the
@@ -665,18 +689,47 @@ export function HubView() {
 
               <div className="mb-4 flex max-h-[320px] flex-col gap-3 overflow-y-auto px-1 py-1" style={{ scrollbarWidth: "none" }}>
                 <AnimatePresence initial={false}>
-                  {messages.map((msg) => (
-                    <motion.div key={msg.id}
-                      initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
-                      transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                      className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                      <div className={cn("max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed", msg.role === "user" ? "rounded-br-sm" : "rounded-bl-sm")}
-                        style={msg.role === "user" ? { background: "rgba(255,255,255,0.10)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff" }
-                          : { background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.75)" }}>
-                        {msg.content}
-                      </div>
-                    </motion.div>
-                  ))}
+                  {messages.map((msg) => {
+                    // Log de ferramenta — linha discreta.
+                    if (msg.role === "log") return (
+                      <motion.div key={msg.id} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
+                        transition={{ duration: 0.2 }} className="flex items-center gap-2 pl-1">
+                        <span className="h-1 w-1 flex-shrink-0 rounded-full bg-white/25" />
+                        <span className="text-[12px] text-white/40">{msg.content}</span>
+                      </motion.div>
+                    );
+                    // Artefato — card clicável de download.
+                    if (msg.role === "artifact" && msg.artifact) return (
+                      <motion.button key={msg.id} onClick={() => downloadArtifact(msg.artifact!)}
+                        initial={{ opacity: 0, y: 8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+                        whileHover={{ scale: 1.015, borderColor: "rgba(255,255,255,0.28)" }} whileTap={{ scale: 0.985 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 26 }}
+                        className="group flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3.5 py-3 text-left"
+                        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)" }}>
+                        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(255,255,255,0.10)" }}>
+                          <Icon name="FileText" size={16} strokeWidth={1.75} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-white/90">{msg.artifact.filename}</p>
+                          <p className="text-[11px] text-white/40">{(msg.artifact.format ?? "arquivo").toUpperCase()} · {(msg.artifact.bytes / 1024).toFixed(1)} KB · baixar</p>
+                        </div>
+                        <Icon name="Download" size={16} className="flex-shrink-0 text-white/40 transition-colors group-hover:text-white/80" />
+                      </motion.button>
+                    );
+                    // Balão de conversa (user / assistant).
+                    return (
+                      <motion.div key={msg.id}
+                        initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                        className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
+                        <div className={cn("max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed", msg.role === "user" ? "rounded-br-sm" : "rounded-bl-sm")}
+                          style={msg.role === "user" ? { background: "rgba(255,255,255,0.10)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff" }
+                            : { background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.75)" }}>
+                          {msg.content || "…"}
+                        </div>
+                      </motion.div>
+                    );
+                  })}
                 </AnimatePresence>
 
                 <AnimatePresence>
@@ -701,9 +754,9 @@ export function HubView() {
                 style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.1)" }}>
                 <input ref={chatInputRef} value={chatInput} onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
-                  placeholder="Responda aqui..." autoFocus
-                  className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/30" />
-                <motion.button onClick={sendChatMessage} disabled={!chatInput.trim() || isTyping}
+                  placeholder={chatBusy ? "Maestro está respondendo…" : "Descreva o que precisa…"} autoFocus disabled={chatBusy}
+                  className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/30 disabled:opacity-60" />
+                <motion.button onClick={sendChatMessage} disabled={!chatInput.trim() || chatBusy}
                   whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
                   className="flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-xl text-white/60 transition-colors hover:text-white disabled:opacity-30"
                   style={{ background: "rgba(255,255,255,0.08)" }}>
@@ -712,7 +765,7 @@ export function HubView() {
               </div>
 
               <div className="mt-3 flex justify-center">
-                <button onClick={() => setPhase("idle")} className="cursor-pointer text-xs text-white/30 transition-colors hover:text-white/60">
+                <button onClick={() => { abortRef.current?.abort(); abortRef.current = null; setPhase("idle"); }} className="cursor-pointer text-xs text-white/30 transition-colors hover:text-white/60">
                   Cancelar
                 </button>
               </div>
