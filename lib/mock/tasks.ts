@@ -10,6 +10,7 @@ export interface Task {
   done: boolean;
   due?: string;
   description?: string;
+  recurring?: boolean;
 }
 
 export const TASK_LISTS: { id: TaskList; label: string; short: string; weekend: boolean }[] = [

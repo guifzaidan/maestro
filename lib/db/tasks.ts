@@ -9,6 +9,7 @@ export interface CreateTaskInput {
   due?: string | null;
   tools?: string[] | null;
   instruction?: string | null;
+  sourceRecurring?: string | null;
 }
 
 export async function listTasks(): Promise<Task[]> {
@@ -28,6 +29,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     tools: input.tools ? JSON.stringify(input.tools) : null,
     instruction: input.instruction ?? null,
     createdAt: Date.now(),
+    sourceRecurring: input.sourceRecurring ?? null,
   };
   await db.insert(tasks).values(row);
   return row as Task;

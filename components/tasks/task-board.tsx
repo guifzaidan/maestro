@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { DatePicker } from "@/components/ui/date-picker";
+import { fetchRecurring, saveRecurring, removeRecurring, generateRecurring, type RecurringDTO, type Frequency } from "@/lib/recurring-client";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { WorkspaceDot } from "@/components/shell/header";
@@ -77,6 +78,7 @@ interface DbTaskRow {
   done: boolean;
   due: string | null;
   instruction: string | null;
+  sourceRecurring: string | null;
 }
 
 /** Mapeia uma linha do banco para o formato que a board usa. Sem dia → hoje. */
@@ -90,6 +92,7 @@ function toBoardTask(row: DbTaskRow): Task {
     done: row.done,
     due: row.due ?? undefined,
     description: row.instruction ?? undefined,
+    recurring: !!row.sourceRecurring,
   };
 }
 
@@ -113,19 +116,20 @@ export function TaskBoard() {
   const [view, setView] = useState<View>("semana");
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [editTarget, setEditTarget] = useState<Task | null>(null);
+  const [recurringOpen, setRecurringOpen] = useState(false);
+
+  // Materializa as recorrentes vencidas hoje e recarrega as tasks.
+  const loadTasks = useCallback(async () => {
+    await generateRecurring();
+    const data = await fetch("/api/tasks").then((r) => r.json()).catch(() => ({}));
+    setTasks((data.tasks ?? []).map(toBoardTask));
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/tasks")
-      .then((r) => r.json())
-      .then((data) => {
-        if (cancelled) return;
-        setTasks((data.tasks ?? []).map(toBoardTask));
-      })
-      .catch(() => {})
-      .finally(() => !cancelled && setLoading(false));
+    loadTasks().finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
-  }, []);
+  }, [loadTasks]);
 
   const toggle = (id: string) => {
     // Calcula 'next' de forma determinística a partir do estado atual —
@@ -234,6 +238,16 @@ export function TaskBoard() {
           ))}
         </div>
 
+        <motion.button
+          whileHover={{ scale: 1.03 }}
+          whileTap={{ scale: 0.97 }}
+          onClick={() => setRecurringOpen(true)}
+          title="Tarefas recorrentes"
+          className="flex cursor-pointer items-center gap-1.5 rounded-lg border border-[var(--border)] px-3 py-1.5 text-[12px] font-medium text-muted transition-colors hover:border-[var(--border-strong)] hover:text-white"
+        >
+          <Icon name="RefreshCcw" size={13} strokeWidth={1.75} />
+          <span className="hidden sm:inline">Recorrentes</span>
+        </motion.button>
       </div>
 
       {loading && (
@@ -260,6 +274,12 @@ export function TaskBoard() {
             onCancel={() => setEditTarget(null)}
             onDelete={() => requestDelete(editTarget.id, editTarget.title)}
           />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {recurringOpen && (
+          <RecurringModal onClose={() => { setRecurringOpen(false); loadTasks(); }} />
         )}
       </AnimatePresence>
 
@@ -782,6 +802,203 @@ const FIELD_STYLE = {
   border: "1px solid rgba(255,255,255,0.10)",
 } as React.CSSProperties;
 
+/* ── Recurring tasks modal ────────────────────────────────────── */
+const WEEKDAY_OPTS = [
+  { id: "seg", label: "Seg" }, { id: "ter", label: "Ter" }, { id: "qua", label: "Qua" },
+  { id: "qui", label: "Qui" }, { id: "sex", label: "Sex" }, { id: "sab", label: "Sáb" }, { id: "dom", label: "Dom" },
+];
+const WD_LABEL: Record<string, string> = Object.fromEntries(WEEKDAY_OPTS.map((w) => [w.id, w.label]));
+const FREQS: { id: Frequency; label: string }[] = [
+  { id: "daily", label: "Diária" }, { id: "weekly", label: "Semanal" }, { id: "monthly", label: "Mensal" },
+];
+
+function freqSummary(r: RecurringDTO): string {
+  if (r.frequency === "daily") return "Todo dia";
+  if (r.frequency === "weekly") return r.weekdays.length ? `${r.weekdays.map((d) => WD_LABEL[d] ?? d).join(", ")}` : "Semanal (escolha os dias)";
+  return `Todo dia ${r.dayOfMonth ?? "?"}`;
+}
+
+type RecurForm = { id?: string; branch: string; title: string; instruction: string; frequency: Frequency; weekdays: string[]; dayOfMonth: number };
+
+function RecurringModal({ onClose }: { onClose: () => void }) {
+  const { active, branches } = useWorkspace();
+  const { toast } = useToast();
+  const [items, setItems] = useState<RecurringDTO[]>([]);
+  const [form, setForm] = useState<RecurForm | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const reload = () => fetchRecurring().then(setItems).catch(() => {});
+  useEffect(() => { reload(); }, []);
+
+  const newForm = (): RecurForm => ({ branch: active, title: "", instruction: "", frequency: "daily", weekdays: ["seg"], dayOfMonth: 1 });
+  const editForm = (r: RecurringDTO): RecurForm => ({ id: r.id, branch: r.branch, title: r.title, instruction: r.instruction ?? "", frequency: r.frequency, weekdays: r.weekdays.length ? r.weekdays : ["seg"], dayOfMonth: r.dayOfMonth ?? 1 });
+
+  const save = async () => {
+    if (!form || !form.title.trim()) return;
+    setSaving(true);
+    try {
+      await saveRecurring({
+        id: form.id, branch: form.branch, title: form.title.trim(),
+        instruction: form.instruction.trim() || null, frequency: form.frequency,
+        weekdays: form.weekdays, dayOfMonth: form.dayOfMonth,
+      });
+      setForm(null);
+      await reload();
+      toast(form.id ? "Recorrente atualizada" : "Recorrente criada", form.id ? "edit" : "create");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : "Falha ao salvar", "delete");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const toggleActive = async (r: RecurringDTO) => {
+    setItems((prev) => prev.map((x) => (x.id === r.id ? { ...x, active: !x.active } : x)));
+    try { await saveRecurring({ ...r, instruction: r.instruction, active: !r.active }); } catch { reload(); }
+  };
+
+  const del = async (id: string) => {
+    setItems((prev) => prev.filter((x) => x.id !== id));
+    try { await removeRecurring(id); toast("Recorrente removida", "delete"); } catch { reload(); }
+  };
+
+  return (
+    <motion.div
+      key="recurring-overlay"
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}
+      className="fixed inset-0 z-[100] flex items-center justify-center"
+      style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ opacity: 0, scale: 0.94, y: 8 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.94, y: 8 }}
+        transition={{ type: "spring", stiffness: 380, damping: 28 }}
+        onClick={(e) => e.stopPropagation()}
+        className="mx-4 flex max-h-[85vh] w-full max-w-[460px] flex-col rounded-2xl p-5"
+        style={GLASS_MODAL}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <p className="flex items-center gap-1.5 text-[15px] font-semibold text-white">
+              <Icon name="RefreshCcw" size={15} /> Tarefas recorrentes
+            </p>
+            <p className="text-[11px] text-muted-2">Geram tasks automaticamente na data.</p>
+          </div>
+          <button onClick={onClose} className="cursor-pointer text-muted-2 transition-colors hover:text-white"><Icon name="X" size={15} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
+          {/* Lista */}
+          {items.length === 0 && !form && (
+            <p className="py-6 text-center text-[13px] text-muted-2">Nenhuma recorrente ainda.</p>
+          )}
+          <div className="space-y-2">
+            {items.map((r) => {
+              const ws = getWorkspace(r.branch);
+              return (
+                <div key={r.id} className="flex items-center gap-3 rounded-xl px-3 py-2.5" style={FIELD_STYLE}>
+                  <WorkspaceDot accent={ws.accent} accent2={ws.accent2} icon={ws.icon} />
+                  <div className="min-w-0 flex-1">
+                    <p className={cn("truncate text-sm", !r.active && "text-muted-2 line-through")}>{r.title}</p>
+                    <p className="text-[11px] text-muted-2">{ws.name} · {freqSummary(r)}</p>
+                  </div>
+                  <button onClick={() => toggleActive(r)} title={r.active ? "Ativa" : "Pausada"}
+                    className={cn("relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors", r.active ? "bg-emerald-400/80" : "bg-white/15")}>
+                    <span className={cn("absolute top-0.5 h-4 w-4 rounded-full bg-white transition-all", r.active ? "left-[18px]" : "left-0.5")} />
+                  </button>
+                  <button onClick={() => setForm(editForm(r))} className="shrink-0 text-muted-2 transition-colors hover:text-white"><Icon name="Pencil" size={13} /></button>
+                  <button onClick={() => del(r.id)} className="shrink-0 text-muted-2 transition-colors hover:text-red-400"><Icon name="Trash2" size={13} /></button>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Form */}
+          {form ? (
+            <div className="mt-3 space-y-3 rounded-xl border border-[var(--border-strong)] p-3">
+              <input autoFocus value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
+                placeholder="Título da tarefa recorrente"
+                className="w-full rounded-lg px-3 py-2 text-[13px] text-white/90 outline-none placeholder:text-white/25" style={FIELD_STYLE} />
+
+              {/* Branch pills */}
+              <div className="flex flex-wrap gap-1.5">
+                {branches.map((w) => {
+                  const on = form.branch === w.id;
+                  return (
+                    <button key={w.id} onClick={() => setForm({ ...form, branch: w.id })}
+                      className="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[12px] transition-colors"
+                      style={{ borderColor: on ? w.accent : "var(--border)", background: on ? `${w.accent}1f` : "transparent", color: on ? "#fff" : "var(--muted)" }}>
+                      <span className="h-1.5 w-1.5 rounded-full" style={{ background: w.accent }} /> {w.name}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Frequência */}
+              <div className="flex gap-1.5">
+                {FREQS.map((f) => {
+                  const on = form.frequency === f.id;
+                  return (
+                    <button key={f.id} onClick={() => setForm({ ...form, frequency: f.id })}
+                      className={cn("flex-1 rounded-lg py-1.5 text-[12px] font-medium transition-colors", on ? "text-white" : "text-muted hover:text-white/80")}
+                      style={on ? { background: "var(--surface-2)", border: "1px solid var(--border-strong)" } : { border: "1px solid var(--border)" }}>
+                      {f.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Condicional: dias da semana / dia do mês */}
+              {form.frequency === "weekly" && (
+                <div className="flex flex-wrap gap-1.5">
+                  {WEEKDAY_OPTS.map((d) => {
+                    const on = form.weekdays.includes(d.id);
+                    return (
+                      <button key={d.id}
+                        onClick={() => setForm((f) => f ? { ...f, weekdays: f.weekdays.includes(d.id) ? f.weekdays.filter((x) => x !== d.id) : [...f.weekdays, d.id] } : f)}
+                        className={cn("h-8 w-9 rounded-lg text-[12px] font-medium transition-colors", on ? "text-white" : "text-muted-2 hover:text-white/70")}
+                        style={on ? { background: "var(--accent-soft)", border: "1px solid var(--accent)" } : { border: "1px solid var(--border)" }}>
+                        {d.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {form.frequency === "monthly" && (
+                <div className="flex items-center gap-2 text-[13px] text-muted">
+                  <span>Todo dia</span>
+                  <input type="number" min={1} max={31} value={form.dayOfMonth}
+                    onChange={(e) => setForm({ ...form, dayOfMonth: Math.min(31, Math.max(1, Number(e.target.value) || 1)) })}
+                    className="w-16 rounded-lg px-2 py-1.5 text-center text-white/90 outline-none" style={FIELD_STYLE} />
+                  <span>do mês</span>
+                </div>
+              )}
+
+              <textarea value={form.instruction} onChange={(e) => setForm({ ...form, instruction: e.target.value })}
+                placeholder="Detalhes / instrução (opcional)" rows={2}
+                className="w-full resize-none rounded-lg px-3 py-2 text-[13px] text-white/90 outline-none placeholder:text-white/25" style={FIELD_STYLE} />
+
+              <div className="flex gap-2">
+                <button onClick={() => setForm(null)} className="flex-1 rounded-lg border border-white/10 py-2 text-[13px] text-white/60 transition-colors hover:text-white/80">Cancelar</button>
+                <button onClick={save} disabled={saving || !form.title.trim()}
+                  className="flex-1 rounded-lg py-2 text-[13px] font-medium text-white transition-colors disabled:opacity-40"
+                  style={{ background: "rgba(255,255,255,0.14)", border: "1px solid rgba(255,255,255,0.2)" }}>
+                  {saving ? "Salvando…" : "Salvar"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => setForm(newForm())}
+              className="mt-3 flex w-full items-center justify-center gap-1.5 rounded-xl border border-dashed border-[var(--border-strong)] py-2.5 text-[13px] text-muted transition-colors hover:text-white">
+              <Icon name="Plus" size={14} /> Nova recorrente
+            </button>
+          )}
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 function EditTaskModal({ task, onSave, onCancel, onDelete }: {
   task: Task;
   onSave: (fields: { title: string; due?: string; description?: string; branch?: string }) => void;
@@ -1089,13 +1306,18 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         </div>
       </button>
 
-      <span
-        className={cn(
-          "flex-1 text-[13px] leading-relaxed",
-          task.done ? "cursor-default text-muted-2 line-through" : "text-white/80"
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span
+          className={cn(
+            "min-w-0 text-[13px] leading-relaxed",
+            task.done ? "cursor-default text-muted-2 line-through" : "text-white/80"
+          )}
+        >
+          {task.title}
+        </span>
+        {task.recurring && (
+          <Icon name="RefreshCcw" size={11} strokeWidth={2} className="shrink-0 text-muted-2" />
         )}
-      >
-        {task.title}
       </span>
 
       {showBranch && (

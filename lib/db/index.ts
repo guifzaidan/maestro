@@ -80,6 +80,18 @@ export function ensureSchema() {
             cost_usd REAL NOT NULL DEFAULT 0,
             created_at INTEGER NOT NULL
           )`,
+          `CREATE TABLE IF NOT EXISTS recurring_tasks (
+            id TEXT PRIMARY KEY,
+            branch_id TEXT NOT NULL REFERENCES branches(id),
+            title TEXT NOT NULL,
+            instruction TEXT,
+            frequency TEXT NOT NULL,
+            weekdays TEXT,
+            day_of_month INTEGER,
+            active INTEGER NOT NULL DEFAULT 1,
+            last_generated TEXT,
+            created_at INTEGER NOT NULL
+          )`,
         ],
         "write",
       );
@@ -101,6 +113,7 @@ export function ensureSchema() {
         "ALTER TABLE tasks ADD COLUMN source_connection TEXT",
         "ALTER TABLE tasks ADD COLUMN source_table TEXT",
         "ALTER TABLE tasks ADD COLUMN source_pk TEXT",
+        "ALTER TABLE tasks ADD COLUMN source_recurring TEXT",
         "ALTER TABLE branches ADD COLUMN claude_token TEXT",
         // Renomeia workspace → branch_id (padroniza a referência à branch).
         "ALTER TABLE tasks RENAME COLUMN workspace TO branch_id",

@@ -36,6 +36,7 @@ export const tasks = sqliteTable("tasks", {
   sourceConnection: text("source_connection"),
   sourceTable:      text("source_table"),
   sourcePk:         text("source_pk"),
+  sourceRecurring:  text("source_recurring"),
 });
 
 /** Uma execução/conversa do maestro. */
@@ -86,6 +87,25 @@ export const usage = sqliteTable("usage", {
   createdAt:    integer("created_at").notNull(),
 });
 
+/**
+ * Tarefas recorrentes: modelos que geram tasks reais automaticamente na data.
+ * `frequency` = daily | weekly | monthly. `weekdays` = JSON array (seg..dom) p/
+ * weekly. `dayOfMonth` (1-31) p/ monthly. `lastGenerated` = última data (dd/mm/aaaa)
+ * em que materializou — evita duplicar no mesmo dia.
+ */
+export const recurringTasks = sqliteTable("recurring_tasks", {
+  id:            text("id").primaryKey(),
+  branch:        text("branch_id").notNull().references(() => branches.id),
+  title:         text("title").notNull(),
+  instruction:   text("instruction"),
+  frequency:     text("frequency").notNull(),
+  weekdays:      text("weekdays"),
+  dayOfMonth:    integer("day_of_month"),
+  active:        integer("active", { mode: "boolean" }).notNull().default(true),
+  lastGenerated: text("last_generated"),
+  createdAt:     integer("created_at").notNull(),
+});
+
 export type Branch       = typeof branches.$inferSelect;
 export type NewBranch    = typeof branches.$inferInsert;
 export type Task         = typeof tasks.$inferSelect;
@@ -96,3 +116,5 @@ export type Connection   = typeof connections.$inferSelect;
 export type NewConnection = typeof connections.$inferInsert;
 export type Usage        = typeof usage.$inferSelect;
 export type NewUsage     = typeof usage.$inferInsert;
+export type RecurringTask    = typeof recurringTasks.$inferSelect;
+export type NewRecurringTask = typeof recurringTasks.$inferInsert;
