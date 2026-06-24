@@ -81,6 +81,7 @@ export function HubView() {
   const agentConvoRef = useRef<AgentMessage[]>([]);
   const agentBufferRef = useRef("");
   const abortRef = useRef<AbortController | null>(null);
+  const chatBranchRef = useRef("");  // branch fixada pela conversa (vazio = home/orquestrador)
 
   const ws = selected ? getWorkspace(selected) : null;
   const tools = selected ? CONNECTORS.filter((c) => c.scopes.includes(selected) && c.id !== "claude") : [];
@@ -213,6 +214,7 @@ export function HubView() {
     abortRef.current = null;
     agentConvoRef.current = [];
     agentBufferRef.current = "";
+    chatBranchRef.current = "";
     setSelected(null); setInput(""); setLinked([]); setSent(false);
     setChatInput(""); setIsTyping(false); setChatBusy(false);
     setMessages([{
@@ -241,9 +243,10 @@ export function HubView() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
-    // Home: sem branch pré-selecionada — o agente pergunta/decide pela conversa.
+    // Home: começa sem branch; o agente fixa via selecionar_branch e o front
+    // passa a usar o token dessa branch nas próximas mensagens.
     streamAgent(
-      { branch: "", messages: agentConvoRef.current },
+      { branch: chatBranchRef.current, messages: agentConvoRef.current },
       {
         onText: (delta) => {
           agentBufferRef.current += delta;
@@ -252,10 +255,16 @@ export function HubView() {
         },
         onToolStart: (e) => {
           setIsTyping(false);
+          if (e.name === "selecionar_branch") return; // silencioso — vira a tag de branch no result
           setMessages(prev => [...prev, { id: `t${e.id}`, role: "log", content: `${toolLabel(e.name)}…` }]);
         },
         onToolResult: (e) => {
-          const r = e.result as { artifact?: ArtifactData; rowCount?: number; task?: { title?: string } } | undefined;
+          const r = e.result as { ok?: boolean; artifact?: ArtifactData; branch_id?: string; branch_name?: string } | undefined;
+          if (e.name === "selecionar_branch" && r?.ok && r.branch_id) {
+            chatBranchRef.current = r.branch_id; // próximas mensagens usam o token dessa branch
+            setMessages(prev => [...prev, { id: `br${e.id}`, role: "log", content: `Branch: ${r.branch_name}` }]);
+            return;
+          }
           if (e.name === "gerar_artefato" && r?.artifact) {
             setMessages(prev => [...prev, { id: `art${e.id}`, role: "artifact", content: r.artifact!.filename, artifact: r.artifact }]);
           }

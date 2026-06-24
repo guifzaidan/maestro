@@ -79,6 +79,7 @@ export async function streamAgent(
 }
 
 const TOOL_LABELS: Record<string, string> = {
+  selecionar_branch: "Selecionando branch",
   criar_tarefa: "Criando tarefa",
   consultar_tarefas: "Consultando tarefas",
   listar_bases_de_dados: "Explorando bases de dados",

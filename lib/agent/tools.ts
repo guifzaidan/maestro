@@ -17,6 +17,18 @@ const BRANCH_DESC = "Branch alvo — pode ser o nome (ex: 'DUX', 'Sheep Tech') o
 export async function buildTools(): Promise<Anthropic.Tool[]> {
   return [
     {
+      name: "selecionar_branch",
+      description:
+        "Fixa a branch da conversa assim que o usuário indica qual é (por nome ou id). Chame ISSO PRIMEIRO, antes de consultar dados ou criar tarefas. A partir daí as ferramentas já usam essa branch por padrão.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: "Nome ou id da branch (ex: 'Sheep Tech', 'DUX')." },
+        },
+        required: ["branch"],
+      },
+    },
+    {
       name: "criar_tarefa",
       description:
         "Cria uma tarefa no hub e persiste no banco. Use quando o usuário quer registrar algo para fazer depois (não execução imediata).",
@@ -129,6 +141,15 @@ async function describeTarget(t: TursoTarget, includeSchema: boolean) {
 /** Executa uma ferramenta e devolve um resultado serializável. */
 export async function executeTool(name: string, input: ToolInput, ctx: ToolContext): Promise<unknown> {
   switch (name) {
+    case "selecionar_branch": {
+      const id = await resolveBranchId(String(input.branch ?? ""));
+      if (!id) return { ok: false, error: `Branch '${String(input.branch ?? "")}' não encontrada. Peça ao usuário pra confirmar qual é.` };
+      ctx.branch = id; // passa a valer para as próximas ferramentas deste turno
+      const branches = await listBranches();
+      const b = branches.find((x) => x.id === id);
+      return { ok: true, branch_id: id, branch_name: b?.name ?? id };
+    }
+
     case "criar_tarefa": {
       const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
       if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário em qual branch criar essa tarefa." };

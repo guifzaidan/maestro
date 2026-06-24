@@ -10,9 +10,14 @@ export const maxDuration = 300;
 
 /**
  * Seleciona a API key da branch. Prioridade: token salvo no banco (Configurações
- * → Branchs) → env por branch → env global do orquestrador.
+ * → Branchs) → env por branch → env global. Na home (branch vazia) usa o token
+ * do orquestrador (branch "pessoal").
  */
 async function keyFor(branch: string): Promise<string | undefined> {
+  if (!branch) {
+    // Home/branchless: token do orquestrador (branch pessoal) ou env global.
+    return (await getBranchToken(BRANCH_IDS.pessoal)) || process.env.ANTHROPIC_API_KEY;
+  }
   const dbToken = await getBranchToken(branch);
   if (dbToken) return dbToken;
   if (branch === BRANCH_IDS.dux) return process.env.ANTHROPIC_API_KEY_DUX || process.env.ANTHROPIC_API_KEY;
@@ -45,6 +50,8 @@ export async function POST(request: Request) {
 
       try {
         const convo: Anthropic.MessageParam[] = messages;
+        // ctx compartilhado: selecionar_branch fixa a branch p/ as próximas tools do mesmo turno.
+        const ctx = { branch };
 
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
           const ms = client.messages.stream({
@@ -79,7 +86,7 @@ export async function POST(request: Request) {
             emit({ type: "tool_start", id: tu.id, name: tu.name, input: tu.input });
             let result: unknown;
             try {
-              result = await executeTool(tu.name, tu.input as Record<string, unknown>, { branch });
+              result = await executeTool(tu.name, tu.input as Record<string, unknown>, ctx);
             } catch (e) {
               result = { ok: false, error: e instanceof Error ? e.message : String(e) };
             }
