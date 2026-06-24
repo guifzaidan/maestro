@@ -198,6 +198,19 @@ function ConnectorCard({
                   />
                   <p className="text-[11px] text-muted-2">Account SID e número podem ser editados em Configurações.</p>
                 </>
+              ) : connector.id === "linear" ? (
+                <>
+                  <MaskedField
+                    label="Personal API Key"
+                    icon="KeyRound"
+                    placeholder={self?.hasSecret ? "•••••••• (salvo) — cole para trocar" : "Cole sua key (lin_api_…)"}
+                    value={cred}
+                    onChange={setCred}
+                    showKey={showKey}
+                    onToggleShow={() => setShowKey((s) => !s)}
+                  />
+                  <p className="text-[11px] text-muted-2">Gere em Linear → Settings → API → Personal API keys. O maestro vai poder ler issues e criar cards nesta branch.</p>
+                </>
               ) : (
                 <MaskedField
                   label="Credencial / API Key"

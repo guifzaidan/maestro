@@ -10,7 +10,7 @@ export interface Connector {
   connected: boolean;
   /** which workspaces this connector is wired for */
   scopes: WorkspaceId[];
-  category: "ia" | "drive" | "db" | "docs" | "calendar" | "messaging";
+  category: "ia" | "drive" | "db" | "docs" | "calendar" | "messaging" | "pm";
 }
 
 export const CONNECTORS: Connector[] = [
@@ -85,5 +85,14 @@ export const CONNECTORS: Connector[] = [
     connected: false,
     scopes: ALL_BRANCHES,
     category: "messaging",
+  },
+  {
+    id: "linear",
+    name: "Linear",
+    description: "Leitura de issues e criação de cards via API — o maestro lê e abre tarefas.",
+    icon: "LayoutDashboard",
+    connected: false,
+    scopes: ALL_BRANCHES,
+    category: "pm",
   },
 ];

@@ -84,6 +84,8 @@ const TOOL_LABELS: Record<string, string> = {
   consultar_tarefas: "Consultando tarefas",
   listar_bases_de_dados: "Explorando bases de dados",
   consultar_base_de_dados: "Consultando base de dados",
+  listar_linear: "Consultando o Linear",
+  criar_card_linear: "Criando card no Linear",
   gerar_artefato: "Gerando arquivo",
 };
 

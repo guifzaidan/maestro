@@ -1,9 +1,10 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { createTask, listTasks } from "@/lib/db/tasks";
 import { listBranches } from "@/lib/db/branches";
-import { listTursoTargets, type TursoTarget } from "@/lib/db/connections";
+import { listTursoTargets, getConnectionSecret, type TursoTarget } from "@/lib/db/connections";
 import { introspectTurso } from "@/lib/turso-introspect";
 import { queryTurso } from "@/lib/turso-query";
+import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue } from "@/lib/linear";
 import { buildArtifact, type ArtifactFormat } from "./artifacts";
 
 /** Contexto de execução de uma ferramenta — a branch ativa pode ser vazia (home). */
@@ -96,6 +97,38 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
       },
     },
     {
+      name: "listar_linear",
+      description:
+        "Lista times, projetos e issues recentes do Linear conectado à branch. Filtros opcionais: 'time' (nome/key) e 'projeto' (nome). " +
+        "Sem filtro, traz a visão geral (todos os times + issues recentes). Passe 'time' pra ver os projetos daquele time. " +
+        "Use pra descobrir time/projeto antes de criar um card.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          time: { type: "string", description: "Filtra por time (nome ou key). Opcional." },
+          projeto: { type: "string", description: "Filtra por projeto (nome). Requer 'time' pra resolver corretamente. Opcional." },
+        },
+      },
+    },
+    {
+      name: "criar_card_linear",
+      description:
+        "Cria um card (issue) no Linear da branch. Informe o título, o time e (se houver) o projeto. " +
+        "Se o usuário não disser o time/projeto, NÃO chute: use listar_linear e pergunte com perguntar_opcoes.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          titulo: { type: "string", description: "Título do card." },
+          descricao: { type: "string", description: "Descrição em markdown. Opcional." },
+          time: { type: "string", description: "Nome ou key do time do Linear. Pergunte se não souber." },
+          projeto: { type: "string", description: "Nome do projeto dentro do time. Opcional, mas pergunte se o time tiver projetos." },
+        },
+        required: ["titulo", "time"],
+      },
+    },
+    {
       name: "gerar_artefato",
       description:
         "Gera um arquivo baixável a partir de conteúdo que você produz. Use para documentos, tabelas, relatórios e exports. " +
@@ -131,6 +164,28 @@ async function resolveBranchId(value: string | undefined | null): Promise<string
   if (exact) return exact.id;
   const partial = branches.find((b) => b.name.toLowerCase().includes(lc));
   return partial?.id ?? null;
+}
+
+/** Resolve um time do Linear por nome ou key (exato → parcial). null se não achar. */
+function matchTeam<T extends { name: string; key: string }>(teams: T[], value: string): T | null {
+  const q = value.trim().toLowerCase();
+  if (!q) return null;
+  return (
+    teams.find((t) => t.name.toLowerCase() === q || t.key.toLowerCase() === q) ??
+    teams.find((t) => t.name.toLowerCase().includes(q) || t.key.toLowerCase().includes(q)) ??
+    null
+  );
+}
+
+/** Resolve um projeto do Linear por nome (exato → parcial). null se não achar. */
+function matchProject<T extends { name: string }>(projects: T[], value: string): T | null {
+  const q = value.trim().toLowerCase();
+  if (!q) return null;
+  return (
+    projects.find((p) => p.name.toLowerCase() === q) ??
+    projects.find((p) => p.name.toLowerCase().includes(q)) ??
+    null
+  );
 }
 
 /** Resume um TursoTarget + tabelas para o agente (sem expor o token). */
@@ -215,6 +270,86 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
       try {
         const res = await queryTurso(target.url, target.token, String(input.sql ?? ""));
         return { ok: true, conexao_id: target.id, ...res };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "listar_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      try {
+        const teams = await listLinearTeams(key);
+        const matched = input.time ? matchTeam(teams, String(input.time)) : null;
+
+        // Projetos: do time filtrado, ou os do workspace inteiro.
+        const projects = await listLinearProjects(key, matched?.id);
+        const proj = input.projeto ? matchProject(projects, String(input.projeto)) : null;
+
+        const issues = await listLinearIssues(key, {
+          limit: 25,
+          teamKey: matched?.key,
+          projectId: proj?.id,
+        });
+
+        return {
+          ok: true,
+          time_filtrado: matched?.name ?? null,
+          projeto_filtrado: proj?.name ?? null,
+          teams: teams.map((t) => ({ nome: t.name, key: t.key })),
+          projetos: projects.map((p) => ({ nome: p.name, estado: p.state ?? null })),
+          issues: issues.map((i) => ({ id: i.identifier, titulo: i.title, estado: i.state?.name, time: i.team?.name, projeto: i.project?.name ?? null, responsavel: i.assignee?.name ?? null, url: i.url })),
+        };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "criar_card_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const titulo = String(input.titulo ?? "").trim();
+      if (!titulo) return { ok: false, error: "Título do card é obrigatório." };
+      try {
+        const teams = await listLinearTeams(key);
+        if (teams.length === 0) return { ok: false, error: "Nenhum time encontrado no Linear." };
+        const team = input.time ? matchTeam(teams, String(input.time)) : null;
+        if (!team) {
+          return {
+            ok: false,
+            error: "ASK_TEAM: time não informado ou não encontrado. Liste os times (listar_linear) e pergunte qual com perguntar_opcoes.",
+            times_disponiveis: teams.map((t) => `${t.name} (${t.key})`),
+          };
+        }
+
+        // Resolve projeto dentro do time, se informado.
+        let projectId: string | undefined;
+        let projectName: string | null = null;
+        if (input.projeto) {
+          const projects = await listLinearProjects(key, team.id);
+          const proj = matchProject(projects, String(input.projeto));
+          if (!proj) {
+            return {
+              ok: false,
+              error: `ASK_PROJECT: projeto '${String(input.projeto)}' não encontrado no time ${team.name}. Pergunte qual com perguntar_opcoes.`,
+              projetos_disponiveis: projects.map((p) => p.name),
+            };
+          }
+          projectId = proj.id;
+          projectName = proj.name;
+        }
+
+        const issue = await createLinearIssue(key, {
+          teamId: team.id,
+          title: titulo,
+          description: input.descricao ? String(input.descricao) : undefined,
+          projectId,
+        });
+        return { ok: true, card: { id: issue.identifier, titulo: issue.title, url: issue.url }, time: team.name, projeto: projectName };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }

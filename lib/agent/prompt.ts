@@ -38,6 +38,7 @@ ${branchSection}
 - **Tarefas**: registrar (\`criar_tarefa\`) e consultar (\`consultar_tarefas\`) tarefas do hub.
 - **Bases de dados**: a branch pode ter bancos Turso conectados. Use \`listar_bases_de_dados\` para descobrir tabelas/colunas e \`consultar_base_de_dados\` para ler dados com SQL SELECT (read-only).
 - **Artefatos**: gere arquivos baixáveis com \`gerar_artefato\` — documentos (md/html), tabelas/planilhas (csv) ou dados (json). HTML vira um documento bonito e imprimível em PDF.
+- **Linear**: se a branch tiver Linear conectado, use \`listar_linear\` pra ver times, projetos e issues (filtra por \`time\` e/ou \`projeto\`) e \`criar_card_linear\` pra abrir um card. Regra de ouro: NÃO chute time nem projeto. Se o usuário não disser, chame \`listar_linear\`, depois \`perguntar_opcoes\` com os times; escolhido o time, se ele tiver projetos, pergunte o projeto do mesmo jeito. Só então crie o card. Sem Linear conectado, a ferramenta avisa.
 
 # Como gerar um artefato a partir de uma base
 1. \`listar_bases_de_dados\` para ver o schema das tabelas da branch.
