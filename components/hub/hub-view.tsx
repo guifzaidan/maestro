@@ -120,7 +120,7 @@ export function HubView() {
   const transcriptRef = useRef<string>(""); // transcrição final acumulada
   const chatEndRef = useRef<HTMLDivElement>(null);
   const execEndRef = useRef<HTMLDivElement>(null);
-  const chatInputRef = useRef<HTMLInputElement>(null);
+  const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const execInputRef = useRef<HTMLInputElement>(null);
   const doAutoSubmitRef = useRef<(() => void) | null>(null);
   const agentConvoRef = useRef<AgentMessage[]>([]);
@@ -157,6 +157,14 @@ export function HubView() {
   useEffect(() => {
     if (phase === "chat" && !chatBusy) chatInputRef.current?.focus();
   }, [phase, chatBusy, messages]);
+
+  // Auto-cresce o textarea do chat conforme o texto (estilo WhatsApp).
+  useEffect(() => {
+    const el = chatInputRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [chatInput]);
 
   // Keep execution input focused while running
   useEffect(() => {
@@ -899,15 +907,17 @@ export function HubView() {
                 <div ref={chatEndRef} />
               </div>
 
-              <div className="flex items-center gap-3 rounded-2xl px-4 py-3"
+              <div className="flex items-end gap-3 rounded-2xl px-4 py-2.5"
                 style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.1)" }}>
-                <input ref={chatInputRef} value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+                <textarea ref={chatInputRef} value={chatInput} onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
                   placeholder={chatBusy ? "Maestro está respondendo…" : "Descreva o que precisa…"} autoFocus disabled={chatBusy}
-                  className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/30 disabled:opacity-60" />
+                  rows={1}
+                  className="flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed text-white outline-none placeholder:text-white/30 disabled:opacity-60"
+                  style={{ maxHeight: 140 }} />
                 <motion.button onClick={sendChatMessage} disabled={!chatInput.trim() || chatBusy}
                   whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                  className="flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-xl text-white/60 transition-colors hover:text-white disabled:opacity-30"
+                  className="mb-0.5 flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-xl text-white/60 transition-colors hover:text-white disabled:opacity-30"
                   style={{ background: "rgba(255,255,255,0.08)" }}>
                   <Icon name="SendHorizontal" size={14} strokeWidth={2} />
                 </motion.button>
