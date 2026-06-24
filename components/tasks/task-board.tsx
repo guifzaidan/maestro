@@ -131,6 +131,13 @@ export function TaskBoard() {
     return () => { cancelled = true; };
   }, [loadTasks]);
 
+  // Recarrega quando uma tarefa é criada de fora (ex: atalho global ⌘/Ctrl+I).
+  useEffect(() => {
+    const onChanged = () => { void loadTasks(); };
+    window.addEventListener("maestro:tasks-changed", onChanged);
+    return () => window.removeEventListener("maestro:tasks-changed", onChanged);
+  }, [loadTasks]);
+
   const toggle = (id: string) => {
     // Calcula 'next' de forma determinística a partir do estado atual —
     // não dentro do updater do setState (que pode rodar de forma assíncrona).

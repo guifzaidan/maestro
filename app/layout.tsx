@@ -4,6 +4,7 @@ import "./globals.css";
 import { WorkspaceProvider } from "@/lib/workspace-context";
 import { AppShell } from "@/components/shell/app-shell";
 import { ToastProvider } from "@/components/ui/toast";
+import { KeyboardShortcuts } from "@/components/shell/keyboard-shortcuts";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -39,6 +40,7 @@ export default function RootLayout({
       <body className="min-h-full">
         <WorkspaceProvider>
           <ToastProvider>
+            <KeyboardShortcuts />
             <AppShell>{children}</AppShell>
           </ToastProvider>
         </WorkspaceProvider>

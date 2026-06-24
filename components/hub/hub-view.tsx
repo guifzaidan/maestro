@@ -377,6 +377,19 @@ export function HubView() {
     return () => window.removeEventListener("maestro:home", reset);
   }, []);
 
+  // Atalho global ⌘/Ctrl+B → inicia um chat com o maestro. Funciona tanto já na
+  // home (evento) quanto ao chegar de outra página (flag no sessionStorage).
+  const startChatRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    const onNewChat = () => startChatRef.current();
+    window.addEventListener("maestro:new-chat", onNewChat);
+    if (sessionStorage.getItem("maestro:start-chat") === "1") {
+      sessionStorage.removeItem("maestro:start-chat");
+      startChatRef.current();
+    }
+    return () => window.removeEventListener("maestro:new-chat", onNewChat);
+  }, []);
+
   const startMic = async () => {
     setMicError(null);
     lastSoundRef.current = 0;
@@ -494,6 +507,7 @@ export function HubView() {
     }]);
     setPhase("chat");
   };
+  startChatRef.current = startAgentChat;
 
   // Dispara uma rodada do agente no chat: streama texto + ferramentas + artefatos.
   const runChatTurn = () => {
