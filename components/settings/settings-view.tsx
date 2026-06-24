@@ -12,6 +12,7 @@ import { Icon } from "@/components/ui/icon";
 import { useToast } from "@/components/ui/toast";
 import { CONNECTORS } from "@/lib/mock/integrations";
 import { ConnectorsList } from "@/components/integrations/integrations-view";
+import { fetchConnections, type ConnectionDTO } from "@/lib/connections-client";
 import { cn } from "@/lib/utils";
 
 const MASKED = "sk-ant-••••••••••••••••••••••••";
@@ -118,6 +119,7 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
   const [tokenInput, setTokenInput] = useState("");
   const [saving, setSaving] = useState(false);
   const [stats, setStats] = useState<BranchStats>(EMPTY_STATS);
+  const [persisted, setPersisted] = useState<ConnectionDTO[]>([]);
 
   // Consumo REAL do mês (tokens + custo) — registrado a cada chamada do agente.
   useEffect(() => {
@@ -125,6 +127,11 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
       .then((r) => r.json())
       .then((d) => { if (d && typeof d.tokensUsed === "number") setStats(d); })
       .catch(() => {});
+  }, [w.id]);
+
+  // Conexões reais da branch — para contar integrações ativas.
+  useEffect(() => {
+    fetchConnections(w.id).then(setPersisted).catch(() => {});
   }, [w.id]);
 
   const handleSave = async () => {
@@ -171,8 +178,14 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
   const tokenPct = Math.round((stats.tokensUsed / stats.tokensLimit) * 100);
   const costPct   = Math.round((stats.costUsd / stats.creditsUsd) * 100);
 
-  const totalIntegrations = CONNECTORS.filter((c) => c.scopes.includes(w.id as never)).length;
-  const connectedIntegrations = CONNECTORS.filter((c) => c.scopes.includes(w.id as never) && c.connected).length;
+  // Integrações disponíveis (catálogo) e ativas DE VERDADE nesta branch.
+  const scoped = CONNECTORS.filter((c) => c.scopes.includes(w.id));
+  const isActive = (c: (typeof CONNECTORS)[number]) =>
+    c.category === "db"
+      ? persisted.some((p) => p.connector === c.id) // banco: ao menos uma conexão salva
+      : !!persisted.find((p) => p.id === `${c.id}--${w.id}`)?.connected; // não-db: toggle conectado
+  const totalIntegrations = scoped.length;
+  const connectedIntegrations = scoped.filter(isActive).length;
   const integrationPct = totalIntegrations > 0 ? Math.round((connectedIntegrations / totalIntegrations) * 100) : 0;
 
   return (
