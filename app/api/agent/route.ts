@@ -4,6 +4,7 @@ import { buildSystemPrompt } from "@/lib/agent/prompt";
 import { getBranchToken } from "@/lib/db/branches";
 import { recordUsage } from "@/lib/db/usage";
 import { BRANCH_IDS } from "@/lib/theme";
+import type { AgentAttachment } from "@/lib/agent/client";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -29,7 +30,10 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 const MAX_TOOL_ROUNDS = 8;
 
 export async function POST(request: Request) {
-  const { branch = BRANCH_IDS.pessoal, messages = [] } = await request.json();
+  const { branch = BRANCH_IDS.pessoal, messages = [] } = await request.json() as {
+    branch?: string;
+    messages?: Array<{ role: "user" | "assistant"; content: string; attachments?: AgentAttachment[] }>;
+  };
 
   const apiKey = await keyFor(branch);
   if (!apiKey) {
@@ -49,7 +53,31 @@ export async function POST(request: Request) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
 
       try {
-        const convo: Anthropic.MessageParam[] = messages;
+        const convo: Anthropic.MessageParam[] = messages.map((m) => {
+          if (m.role === "assistant" || !m.attachments?.length) {
+            return { role: m.role, content: m.content };
+          }
+          // Mensagem do usuário com anexos → content array com blocos nativos
+          const blocks: Anthropic.ContentBlockParam[] = [];
+          for (const a of m.attachments) {
+            if (a.type === "image") {
+              blocks.push({
+                type: "image",
+                source: { type: "base64", media_type: (a.mimeType ?? "image/jpeg") as Anthropic.Base64ImageSource["media_type"], data: a.content },
+              });
+            } else if (a.type === "pdf") {
+              blocks.push({
+                type: "document",
+                source: { type: "base64", media_type: "application/pdf", data: a.content },
+              } as Anthropic.ContentBlockParam);
+            } else {
+              // Texto extraído (Excel, Word, txt…)
+              blocks.push({ type: "text", text: `[Arquivo: ${a.filename}]\n\n${a.content}` });
+            }
+          }
+          if (m.content.trim()) blocks.push({ type: "text", text: m.content });
+          return { role: "user" as const, content: blocks };
+        });
         // ctx compartilhado: selecionar_branch fixa a branch p/ as próximas tools do mesmo turno.
         const ctx = { branch };
 

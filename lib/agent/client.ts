@@ -1,6 +1,14 @@
+export interface AgentAttachment {
+  type: "image" | "pdf" | "text";
+  filename: string;
+  content: string;   // base64 para image/pdf, texto puro para text
+  mimeType?: string;
+}
+
 export interface AgentMessage {
   role: "user" | "assistant";
   content: string;
+  attachments?: AgentAttachment[];
 }
 
 export interface AgentHandlers {

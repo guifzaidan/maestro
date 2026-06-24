@@ -7,7 +7,7 @@ import { Icon } from "@/components/ui/icon";
 import { PageTransition } from "@/components/shell/page-transition";
 import { CONNECTORS } from "@/lib/mock/integrations";
 import { cn } from "@/lib/utils";
-import { streamAgent, toolLabel, friendlyAgentError, type AgentMessage } from "@/lib/agent/client";
+import { streamAgent, toolLabel, friendlyAgentError, type AgentMessage, type AgentAttachment } from "@/lib/agent/client";
 import { DatePicker } from "@/components/ui/date-picker";
 import { useIsMobile } from "@/lib/use-is-mobile";
 
@@ -20,7 +20,7 @@ const BEAMS = [
   { color: "#f97316", left: "46%", angle: -4,  width: 70,  dur: 10, delay: 1.2 },
 ];
 
-interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifact" | "choice"; content: string; artifact?: ArtifactData; options?: string[]; }
+interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifact" | "choice"; content: string; artifact?: ArtifactData; options?: string[]; attachments?: AgentAttachment[]; }
 interface MindNode   { id: string; label: string; value: string; type: "branch" | "tools" | "deadline" | "text"; }
 interface ArtifactData { filename: string; mime: string; base64: string; bytes: number; format?: string; }
 interface ExecEvent  { id: string; type: "log" | "assistant" | "user" | "done" | "artifact"; content: string; artifact?: ArtifactData; }
@@ -55,7 +55,7 @@ function createRecognition(): SpeechRecognitionLike | null {
   return r;
 }
 
-/** Render leve de markdown inline: **negrito** e `código`. Quebras de linha via CSS. */
+/** Render leve de markdown inline: **negrito** e `código`. */
 function renderInline(text: string): ReactNode {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
   return parts.map((p, i) => {
@@ -65,6 +65,46 @@ function renderInline(text: string): ReactNode {
     );
     return <span key={i}>{p}</span>;
   });
+}
+
+/**
+ * Render de markdown com suporte a listas (- item), negrito e código.
+ * Agrupa linhas consecutivas com "- " em <ul><li> com bullets reais.
+ */
+function renderMarkdown(text: string): ReactNode {
+  const lines = text.split("\n");
+  const blocks: ReactNode[] = [];
+  let listItems: string[] = [];
+  let key = 0;
+
+  const flushList = () => {
+    if (!listItems.length) return;
+    blocks.push(
+      <ul key={key++} className="my-1 list-disc space-y-0.5 pl-4">
+        {listItems.map((item, i) => (
+          <li key={i}>{renderInline(item)}</li>
+        ))}
+      </ul>
+    );
+    listItems = [];
+  };
+
+  for (const line of lines) {
+    const listMatch = line.match(/^[-*]\s+(.+)$/);
+    if (listMatch) {
+      listItems.push(listMatch[1]);
+    } else {
+      flushList();
+      if (line.trim()) {
+        blocks.push(<span key={key++} className="block">{renderInline(line)}</span>);
+      } else if (blocks.length) {
+        blocks.push(<span key={key++} className="block h-1" />);
+      }
+    }
+  }
+  flushList();
+
+  return <>{blocks}</>;
 }
 
 /** Converte base64 → Blob e dispara o download no navegador. */
@@ -146,11 +186,23 @@ const MessageRow = memo(function MessageRow({ msg, chatBusy, onPick }: {
   return (
     <motion.div initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
       transition={{ type: "spring", stiffness: 300, damping: 28 }}
-      className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-      <div className={cn("max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed", msg.role === "user" ? "rounded-br-sm" : "rounded-bl-sm")}
+      className={cn("flex flex-col", msg.role === "user" ? "items-end" : "items-start")}>
+      {/* Chips de anexos do usuário */}
+      {msg.role === "user" && msg.attachments?.length ? (
+        <div className="mb-1 flex flex-wrap justify-end gap-1.5">
+          {msg.attachments.map((a, i) => (
+            <div key={i} className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] text-white/60"
+              style={{ background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)" }}>
+              <Icon name={a.type === "image" ? "Image" : a.type === "pdf" ? "FileText" : "File"} size={11} strokeWidth={2} />
+              <span className="max-w-[140px] truncate">{a.filename}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className={cn("max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed", msg.role === "user" ? "rounded-br-sm whitespace-pre-wrap" : "rounded-bl-sm")}
         style={msg.role === "user" ? { background: "rgba(255,255,255,0.10)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff" }
           : { background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.78)" }}>
-        {msg.role === "assistant" ? (msg.content ? renderInline(msg.content) : "…") : msg.content}
+        {msg.role === "assistant" ? (msg.content ? renderMarkdown(msg.content) : "…") : msg.content}
       </div>
     </motion.div>
   );
@@ -177,6 +229,9 @@ export function HubView() {
   const [chatStep, setChatStep] = useState(0);
   const [isTyping, setIsTyping] = useState(false);
   const [chatBusy, setChatBusy] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<AgentAttachment[]>([]);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [mindNodes, setMindNodes] = useState<MindNode[]>([]);
   const [execEvents, setExecEvents] = useState<ExecEvent[]>([]);
   const [execInput, setExecInput] = useState("");
@@ -489,20 +544,45 @@ export function HubView() {
     setTimeout(() => { setSent(false); setInput(""); setLinked([]); }, 2400);
   };
 
-  /** Envia um texto como mensagem do usuário e dispara uma rodada do agente. */
-  const sendText = (text: string) => {
+  /** Envia um texto (e opcionais anexos pendentes) como mensagem do usuário. */
+  const sendText = (text: string, attachments?: AgentAttachment[]) => {
     const t = text.trim();
-    if (!t || chatBusy) return;
-    setMessages(prev => [...prev, { id: `u${Date.now()}`, role: "user", content: t }]);
-    agentConvoRef.current = [...agentConvoRef.current, { role: "user", content: t }];
+    const atts = attachments ?? pendingFiles;
+    if ((!t && !atts.length) || chatBusy) return;
+    setPendingFiles([]);
+    setMessages(prev => [...prev, { id: `u${Date.now()}`, role: "user", content: t, attachments: atts.length ? atts : undefined }]);
+    const msg: AgentMessage = { role: "user", content: t };
+    if (atts.length) msg.attachments = atts;
+    agentConvoRef.current = [...agentConvoRef.current, msg];
     runChatTurn();
   };
 
   const sendChatMessage = () => {
-    if (!chatInput.trim() || chatBusy) return;
+    if ((!chatInput.trim() && !pendingFiles.length) || chatBusy) return;
     const text = chatInput.trim();
     setChatInput("");
     sendText(text);
+  };
+
+  /** Faz upload do arquivo para /api/upload e adiciona à lista de pendentes. */
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!fileInputRef.current) return;
+    fileInputRef.current.value = "";
+    if (!file) return;
+    setUploadingFile(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch("/api/upload", { method: "POST", body: form });
+      const data = await res.json() as { error?: string } & AgentAttachment;
+      if (!res.ok || data.error) throw new Error(data.error ?? `Erro ${res.status}`);
+      setPendingFiles(prev => [...prev, data]);
+    } catch (err) {
+      setMessages(prev => [...prev, { id: `fe${Date.now()}`, role: "log", content: `⚠ ${err instanceof Error ? err.message : String(err)}` }]);
+    } finally {
+      setUploadingFile(false);
+    }
   };
 
   // Ref pro sendText mais recente, pra manter pickChoice estável (memoização).
@@ -930,20 +1010,50 @@ export function HubView() {
                 <div ref={chatEndRef} />
               </div>
 
-              <div className="flex items-end gap-3 rounded-2xl px-4 py-2.5"
+              <div className="flex flex-col gap-2 rounded-2xl px-4 py-2.5"
                 style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.1)" }}>
-                <textarea ref={chatInputRef} value={chatInput} onChange={(e) => setChatInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
-                  placeholder={chatBusy ? "Maestro está respondendo…" : "Descreva o que precisa…"} autoFocus disabled={chatBusy}
-                  rows={1}
-                  className="flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed text-white outline-none placeholder:text-white/30 disabled:opacity-60"
-                  style={{ maxHeight: 140 }} />
-                <motion.button onClick={sendChatMessage} disabled={!chatInput.trim() || chatBusy}
-                  whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
-                  className="mb-0.5 flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-xl text-white/60 transition-colors hover:text-white disabled:opacity-30"
-                  style={{ background: "rgba(255,255,255,0.08)" }}>
-                  <Icon name="SendHorizontal" size={14} strokeWidth={2} />
-                </motion.button>
+                {/* Chips de arquivos pendentes */}
+                {pendingFiles.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {pendingFiles.map((f, i) => (
+                      <div key={i} className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] text-white/70"
+                        style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.14)" }}>
+                        <Icon name={f.type === "image" ? "Image" : f.type === "pdf" ? "FileText" : "File"} size={11} strokeWidth={2} />
+                        <span className="max-w-[120px] truncate">{f.filename}</span>
+                        <button onClick={() => setPendingFiles(prev => prev.filter((_, j) => j !== i))}
+                          className="ml-0.5 cursor-pointer text-white/40 hover:text-white/80">
+                          <Icon name="X" size={10} strokeWidth={2.5} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className="flex items-end gap-3">
+                  {/* Input oculto de arquivo */}
+                  <input ref={fileInputRef} type="file" className="hidden"
+                    accept="image/*,.pdf,.xlsx,.xls,.docx,.txt,.csv,.md,.json"
+                    onChange={handleFileChange} />
+                  {/* Botão paperclip */}
+                  <motion.button onClick={() => fileInputRef.current?.click()} disabled={chatBusy || uploadingFile}
+                    whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+                    className="mb-0.5 flex h-7 w-7 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-white/40 transition-colors hover:text-white/70 disabled:opacity-30">
+                    {uploadingFile
+                      ? <Icon name="Loader" size={14} strokeWidth={2} className="animate-spin" />
+                      : <Icon name="Paperclip" size={14} strokeWidth={2} />}
+                  </motion.button>
+                  <textarea ref={chatInputRef} value={chatInput} onChange={(e) => setChatInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
+                    placeholder={chatBusy ? "Maestro está respondendo…" : "Descreva o que precisa…"} autoFocus disabled={chatBusy}
+                    rows={1}
+                    className="flex-1 resize-none self-center bg-transparent py-1 text-sm leading-relaxed text-white outline-none placeholder:text-white/30 disabled:opacity-60"
+                    style={{ maxHeight: 140 }} />
+                  <motion.button onClick={sendChatMessage} disabled={(!chatInput.trim() && !pendingFiles.length) || chatBusy}
+                    whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
+                    className="mb-0.5 flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-xl text-white/60 transition-colors hover:text-white disabled:opacity-30"
+                    style={{ background: "rgba(255,255,255,0.08)" }}>
+                    <Icon name="SendHorizontal" size={14} strokeWidth={2} />
+                  </motion.button>
+                </div>
               </div>
 
               <div className="mt-3 flex justify-center">
