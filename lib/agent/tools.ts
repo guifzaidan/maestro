@@ -17,6 +17,19 @@ const BRANCH_DESC = "Branch alvo — pode ser o nome (ex: 'DUX', 'Sheep Tech') o
 export async function buildTools(): Promise<Anthropic.Tool[]> {
   return [
     {
+      name: "perguntar_opcoes",
+      description:
+        "Faz uma pergunta ao usuário com opções clicáveis. Use SEMPRE que houver dúvida ou uma decisão (qual branch, qual formato, sim/não, etc.) em vez de escrever a pergunta no texto. Depois de chamar, PARE e aguarde a resposta.",
+      input_schema: {
+        type: "object",
+        properties: {
+          pergunta: { type: "string", description: "A pergunta, curta e direta." },
+          opcoes: { type: "array", items: { type: "string" }, description: "2 a 5 opções curtas para o usuário clicar." },
+        },
+        required: ["pergunta", "opcoes"],
+      },
+    },
+    {
       name: "selecionar_branch",
       description:
         "Fixa a branch da conversa assim que o usuário indica qual é (por nome ou id). Chame ISSO PRIMEIRO, antes de consultar dados ou criar tarefas. A partir daí as ferramentas já usam essa branch por padrão.",
@@ -141,6 +154,11 @@ async function describeTarget(t: TursoTarget, includeSchema: boolean) {
 /** Executa uma ferramenta e devolve um resultado serializável. */
 export async function executeTool(name: string, input: ToolInput, ctx: ToolContext): Promise<unknown> {
   switch (name) {
+    case "perguntar_opcoes": {
+      // A pergunta + opções são renderizadas no cliente (a partir do input). Só confirma.
+      return { ok: true, aguardando_resposta: true };
+    }
+
     case "selecionar_branch": {
       const id = await resolveBranchId(String(input.branch ?? ""));
       if (!id) return { ok: false, error: `Branch '${String(input.branch ?? "")}' não encontrada. Peça ao usuário pra confirmar qual é.` };

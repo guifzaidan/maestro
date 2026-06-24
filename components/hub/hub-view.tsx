@@ -20,7 +20,7 @@ const BEAMS = [
   { color: "#f97316", left: "46%", angle: -4,  width: 70,  dur: 10, delay: 1.2 },
 ];
 
-interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifact"; content: string; artifact?: ArtifactData; }
+interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifact" | "choice"; content: string; artifact?: ArtifactData; options?: string[]; }
 interface MindNode   { id: string; label: string; value: string; type: "branch" | "tools" | "deadline" | "text"; }
 interface ArtifactData { filename: string; mime: string; base64: string; bytes: number; format?: string; }
 interface ExecEvent  { id: string; type: "log" | "assistant" | "user" | "done" | "artifact"; content: string; artifact?: ArtifactData; }
@@ -275,6 +275,15 @@ export function HubView() {
           setIsTyping(false);
           closeRound(); // o próximo texto começa um balão novo
           if (e.name === "selecionar_branch") return; // silencioso — vira a tag de branch no result
+          if (e.name === "perguntar_opcoes") {
+            const inp = e.input as { pergunta?: string; opcoes?: string[] } | undefined;
+            setMessages(prev => [...prev, {
+              id: `q${e.id}`, role: "choice",
+              content: inp?.pergunta ?? "",
+              options: Array.isArray(inp?.opcoes) ? inp!.opcoes : [],
+            }]);
+            return;
+          }
           setMessages(prev => [...prev, { id: `t${e.id}`, role: "log", content: `${toolLabel(e.name)}…` }]);
         },
         onToolResult: (e) => {
@@ -326,13 +335,27 @@ export function HubView() {
     setTimeout(() => { setSent(false); setInput(""); setLinked([]); }, 2400);
   };
 
+  /** Envia um texto como mensagem do usuário e dispara uma rodada do agente. */
+  const sendText = (text: string) => {
+    const t = text.trim();
+    if (!t || chatBusy) return;
+    setMessages(prev => [...prev, { id: `u${Date.now()}`, role: "user", content: t }]);
+    agentConvoRef.current = [...agentConvoRef.current, { role: "user", content: t }];
+    runChatTurn();
+  };
+
   const sendChatMessage = () => {
     if (!chatInput.trim() || chatBusy) return;
     const text = chatInput.trim();
     setChatInput("");
-    setMessages(prev => [...prev, { id: `u${Date.now()}`, role: "user", content: text }]);
-    agentConvoRef.current = [...agentConvoRef.current, { role: "user", content: text }];
-    runChatTurn();
+    sendText(text);
+  };
+
+  /** Clique numa opção de escolha: remove os botões daquela pergunta e envia. */
+  const pickChoice = (msgId: string, opt: string) => {
+    if (chatBusy) return;
+    setMessages(prev => prev.map(m => m.id === msgId ? { ...m, options: [] } : m));
+    sendText(opt);
   };
 
   // Drives one agent turn: streams text + tool events, accumulates the
@@ -744,6 +767,32 @@ export function HubView() {
                         </div>
                         <Icon name="Download" size={16} className="flex-shrink-0 text-white/40 transition-colors group-hover:text-white/80" />
                       </motion.button>
+                    );
+                    // Pergunta com opções clicáveis (choice).
+                    if (msg.role === "choice") return (
+                      <motion.div key={msg.id}
+                        initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 28 }}
+                        className="flex flex-col items-start gap-2">
+                        {msg.content && (
+                          <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed"
+                            style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.75)" }}>
+                            {renderInline(msg.content)}
+                          </div>
+                        )}
+                        {(msg.options ?? []).length > 0 && (
+                          <div className="flex flex-wrap gap-2">
+                            {msg.options!.map((opt, i) => (
+                              <motion.button key={i} onClick={() => pickChoice(msg.id, opt)} disabled={chatBusy}
+                                whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+                                className="cursor-pointer rounded-full px-3.5 py-1.5 text-[13px] font-medium text-white/90 transition-colors disabled:opacity-40"
+                                style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.16)" }}>
+                                {opt}
+                              </motion.button>
+                            ))}
+                          </div>
+                        )}
+                      </motion.div>
                     );
                     // Balão de conversa (user / assistant).
                     return (
