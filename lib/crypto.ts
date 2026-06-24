@@ -1,14 +1,19 @@
-import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, randomBytes, hkdfSync } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 /**
  * Criptografia simétrica AES-256-GCM para segredos (tokens Claude, keys de conexão).
- * A chave vem de CONNECTIONS_SECRET (32 bytes em base64/hex). Em dev local, se a
- * env não estiver setada, é auto-gerada e persistida em `.connections.key`
- * (gitignored). Em deploy serverless o filesystem é somente-leitura, então a env
- * CONNECTIONS_SECRET é obrigatória lá. Os segredos são cifrados antes de ir pro
- * banco e só decifrados no servidor; o cliente nunca recebe o valor em claro.
+ *
+ * A chave é DERIVADA da DATABASE_AUTH_TOKEN (HKDF-SHA256) — que já existe em
+ * qualquer ambiente que fale com o Turso (localhost e deploy). Assim a mesma
+ * chave vale em todos os lugares sem configurar env nova, e funciona em
+ * serverless (sem escrever em disco). Sem auth token (ex: SQLite local), cai
+ * em CONNECTIONS_SECRET ou num arquivo local gerado (só dev).
+ *
+ * Nota de segurança: quem tem a DATABASE_AUTH_TOKEN consegue derivar a chave —
+ * a cifra protege contra vazamento dos dados SEM o token (dump/backup/screenshot),
+ * não contra quem já tem credencial total do banco.
  *
  * Formato do payload: base64(iv).base64(authTag).base64(ciphertext)
  */
@@ -17,9 +22,13 @@ const KEY_FILE = join(process.cwd(), ".connections.key");
 let cachedKey: Buffer | null = null;
 
 const NO_KEY_MSG =
-  "Criptografia indisponível: defina a env CONNECTIONS_SECRET (32 bytes em base64 ou hex) " +
-  "no ambiente do deploy. Em serverless o filesystem é somente-leitura, então a chave não " +
-  "pode ser gerada em arquivo. Use o MESMO valor do seu .env.local local.";
+  "Criptografia indisponível: faltou DATABASE_AUTH_TOKEN (ou CONNECTIONS_SECRET) no ambiente, " +
+  "e o filesystem é somente-leitura. Configure a conexão do Turso no deploy.";
+
+/** Deriva uma chave de 32 bytes da DATABASE_AUTH_TOKEN — determinística. */
+function deriveFromAuthToken(authToken: string): Buffer {
+  return Buffer.from(hkdfSync("sha256", authToken, "maestro:connections", "aes-256-gcm", 32));
+}
 
 /** Lê a chave do arquivo local ou gera+persiste uma nova (32 bytes). Só dev local. */
 function fileKey(): Buffer {
@@ -32,7 +41,6 @@ function fileKey(): Buffer {
   try {
     writeFileSync(KEY_FILE, key.toString("base64"), { mode: 0o600 });
   } catch {
-    // Filesystem somente-leitura (ex: Vercel/Lambda) — não dá pra persistir.
     throw new Error(NO_KEY_MSG);
   }
   return key;
@@ -40,8 +48,11 @@ function fileKey(): Buffer {
 
 function getKey(): Buffer {
   if (cachedKey) return cachedKey;
-  const raw = process.env.CONNECTIONS_SECRET;
-  if (raw) {
+  const authToken = process.env.DATABASE_AUTH_TOKEN;
+  if (authToken) {
+    cachedKey = deriveFromAuthToken(authToken);
+  } else if (process.env.CONNECTIONS_SECRET) {
+    const raw = process.env.CONNECTIONS_SECRET;
     const key = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
     if (key.length !== 32) throw new Error("CONNECTIONS_SECRET deve ter 32 bytes (256 bits).");
     cachedKey = key;
