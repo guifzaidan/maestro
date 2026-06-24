@@ -7,7 +7,7 @@ import { Icon } from "@/components/ui/icon";
 import { PageTransition } from "@/components/shell/page-transition";
 import { CONNECTORS } from "@/lib/mock/integrations";
 import { cn } from "@/lib/utils";
-import { streamAgent, toolLabel, friendlyAgentError, type AgentMessage, type AgentAttachment } from "@/lib/agent/client";
+import { streamAgent, toolLabel, describeTool, groupLabel, friendlyAgentError, type AgentMessage, type AgentAttachment } from "@/lib/agent/client";
 import { DatePicker } from "@/components/ui/date-picker";
 import { useIsMobile } from "@/lib/use-is-mobile";
 
@@ -20,7 +20,7 @@ const BEAMS = [
   { color: "#f97316", left: "46%", angle: -4,  width: 70,  dur: 10, delay: 1.2 },
 ];
 
-interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifact" | "choice"; content: string; artifact?: ArtifactData; options?: string[]; attachments?: AgentAttachment[]; }
+interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifact" | "choice" | "progress"; content: string; artifact?: ArtifactData; options?: string[]; attachments?: AgentAttachment[]; progressDone?: number; progressTotal?: number; }
 interface MindNode   { id: string; label: string; value: string; type: "branch" | "tools" | "deadline" | "text"; }
 interface ArtifactData { filename: string; mime: string; base64: string; bytes: number; format?: string; }
 interface ExecEvent  { id: string; type: "log" | "assistant" | "user" | "done" | "artifact"; content: string; artifact?: ArtifactData; }
@@ -166,6 +166,19 @@ function renderMarkdown(text: string): ReactNode {
   return <>{blocks}</>;
 }
 
+/** Tokens em formato compacto: 1.2M, 340k, 980. */
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(n >= 100_000 ? 0 : 1)}k`;
+  return String(n);
+}
+
+/** Custo em USD com casas conforme a magnitude. */
+function fmtUsd(n: number): string {
+  if (n > 0 && n < 0.01) return "<$0.01";
+  return `$${n.toFixed(n >= 100 ? 0 : 2)}`;
+}
+
 /** Converte base64 → Blob e dispara o download no navegador. */
 function downloadArtifact(a: ArtifactData) {
   const bin = atob(a.base64);
@@ -198,6 +211,37 @@ const MessageRow = memo(function MessageRow({ msg, chatBusy, onPick }: {
       <span className="text-[12px] text-white/40">{msg.content}</span>
     </motion.div>
   );
+
+  if (msg.role === "progress") {
+    const total = msg.progressTotal ?? 1;
+    const done = Math.min(msg.progressDone ?? 0, total);
+    const complete = done >= total;
+    const pct = Math.round((done / total) * 100);
+    return (
+      <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.25 }}
+        className="flex w-full max-w-[300px] items-center gap-2.5 rounded-xl px-3 py-2"
+        style={{ background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)" }}>
+        <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center">
+          {complete
+            ? <Icon name="CheckCheck" size={14} strokeWidth={2.2} className="text-emerald-400" />
+            : <Icon name="Loader" size={14} strokeWidth={2} className="animate-spin text-white/55" />}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <span className="truncate text-[12px] text-white/55">{msg.content}</span>
+            <span className="flex-shrink-0 font-mono text-[11px] text-white/40">{done}/{total} · {pct}%</span>
+          </div>
+          <div className="mt-1.5 h-1 overflow-hidden rounded-full" style={{ background: "rgba(255,255,255,0.08)" }}>
+            <motion.div className="h-full rounded-full"
+              style={{ background: complete ? "#34d399" : "linear-gradient(90deg, rgba(255,255,255,0.5), rgba(255,255,255,0.8))" }}
+              initial={{ width: 0 }} animate={{ width: `${pct}%` }}
+              transition={{ type: "spring", stiffness: 200, damping: 28 }} />
+          </div>
+        </div>
+      </motion.div>
+    );
+  }
 
   if (msg.role === "artifact" && msg.artifact) return (
     <motion.button onClick={() => downloadArtifact(msg.artifact!)}
@@ -283,6 +327,9 @@ export function HubView() {
   const [audioPhase, setAudioPhase] = useState<"listening" | "processing" | "done">("listening");
   const [micError, setMicError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState("");  // transcrição ao vivo (Web Speech API)
+  const [voiceMode, setVoiceMode] = useState(false);  // conversa por voz ativa (escuta + fala)
+  const [speaking, setSpeaking] = useState(false);    // maestro falando (TTS)
+  const [micActive, setMicActive] = useState(false);  // mic captando agora
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatStep, setChatStep] = useState(0);
@@ -290,6 +337,7 @@ export function HubView() {
   const [chatBusy, setChatBusy] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<AgentAttachment[]>([]);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [usage, setUsage] = useState<{ tokensUsed: number; costUsd: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [mindNodes, setMindNodes] = useState<MindNode[]>([]);
   const [execEvents, setExecEvents] = useState<ExecEvent[]>([]);
@@ -315,6 +363,9 @@ export function HubView() {
   const agentBufferRef = useRef("");
   const abortRef = useRef<AbortController | null>(null);
   const chatBranchRef = useRef("");  // branch fixada pela conversa (vazio = home/orquestrador)
+  const voiceModeRef = useRef(false);   // espelho de voiceMode p/ closures
+  const startedChatRef = useRef(false); // sessão de áudio já abriu o chat
+  const turnDoneRef = useRef(true);     // turno atual do agente terminou
 
   const ws = selected ? getWorkspace(selected) : null;
   const tools = selected ? CONNECTORS.filter((c) => c.scopes.includes(selected) && c.id !== "claude") : [];
@@ -333,9 +384,25 @@ export function HubView() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [phase, mode]);
 
+  // Ao desmontar (sair da home), corta qualquer fala em andamento.
+  useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } }, []);
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
+
+  // Uso REAL do mês (tokens + custo estimado) — atualiza ao abrir o chat.
+  const fetchUsage = useCallback(async () => {
+    try {
+      const r = await fetch("/api/usage");
+      const d = await r.json();
+      setUsage({ tokensUsed: Number(d.tokensUsed ?? 0), costUsd: Number(d.costUsd ?? 0) });
+    } catch { /* silencioso */ }
+  }, []);
+
+  useEffect(() => {
+    if (phase === "chat") void fetchUsage();
+  }, [phase, fetchUsage]);
 
   useEffect(() => {
     execEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -366,6 +433,10 @@ export function HubView() {
       abortRef.current?.abort();
       abortRef.current = null;
       agentConvoRef.current = [];
+      // Encerra qualquer voz em andamento.
+      voiceModeRef.current = false; setVoiceMode(false); setSpeaking(false);
+      startedChatRef.current = false; turnDoneRef.current = true;
+      try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
       setPhase("idle");
       setMode("text");
       setSelected(null); setInput(""); setLinked([]); setSent(false);
@@ -396,8 +467,12 @@ export function HubView() {
     setTranscript("");
     transcriptRef.current = "";
     try {
+      // Não escuta enquanto o maestro fala (evita captar a própria voz).
+      try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+      setSpeaking(false);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
+      setMicActive(true);
 
       // Transcrição real (Web Speech API). Sem suporte → segue só com a forma de onda.
       const recog = createRecognition();
@@ -438,6 +513,7 @@ export function HubView() {
         audioCtxRef.current = null; analyserRef.current = null; streamRef.current = null;
         try { recognitionRef.current?.stop(); } catch { /* ignore */ }
         setAudioLevel(0);
+        setMicActive(false);
         setAudioPhase("processing");
         setTimeout(() => {
           setAudioPhase("done");
@@ -445,8 +521,9 @@ export function HubView() {
             setAudioPhase("listening");
             recognitionRef.current = null;
             const said = transcriptRef.current.trim();
-            startAgentChat();
-            if (said) sendText(said); // a fala vira a 1ª mensagem do agente
+            // 1ª vez abre o chat; nas próximas (loop de voz) só anexa a fala.
+            if (!startedChatRef.current) { startAgentChat(); startedChatRef.current = true; }
+            if (said) sendText(said); // a fala vira a mensagem do usuário
           }, 700);
         }, 2000);
       };
@@ -483,6 +560,59 @@ export function HubView() {
     try { recognitionRef.current?.abort(); } catch { /* ignore */ }
     recognitionRef.current = null;
     setAudioLevel(0);
+    setMicActive(false);
+  };
+
+  /* ── Voz: síntese de fala (TTS nativo, grátis) ─────────────────── */
+
+  // Limpa markdown pra leitura natural (sem *, #, |, links, código).
+  const stripForSpeech = (md: string) =>
+    md.replace(/```[\s\S]*?```/g, " ")
+      .replace(/`([^`]+)`/g, "$1")
+      .replace(/\*\*([^*]+)\*\*/g, "$1")
+      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+      .replace(/^[\s>#*-]+/gm, " ")
+      .replace(/[|*_#>]/g, " ")
+      .replace(/https?:\/\/\S+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  const pickPtVoice = (): SpeechSynthesisVoice | null => {
+    const vs = window.speechSynthesis?.getVoices() ?? [];
+    return vs.find((v) => /pt[-_]?br/i.test(v.lang)) ?? vs.find((v) => /^pt/i.test(v.lang)) ?? null;
+  };
+
+  // Re-abre o mic pra continuar a conversa — só quando o turno acabou E a fala
+  // terminou (pra não captar a própria voz nem cortar a resposta).
+  const maybeReListen = () => {
+    if (!voiceModeRef.current || !turnDoneRef.current) return;
+    const ss = window.speechSynthesis;
+    if (ss && (ss.speaking || ss.pending)) return;
+    void startMic();
+  };
+
+  const speak = (text: string) => {
+    if (!voiceModeRef.current || typeof window === "undefined" || !window.speechSynthesis) return;
+    const clean = stripForSpeech(text);
+    if (!clean) return;
+    const u = new SpeechSynthesisUtterance(clean);
+    u.lang = "pt-BR";
+    const v = pickPtVoice();
+    if (v) u.voice = v;
+    u.rate = 1.05;
+    u.onstart = () => setSpeaking(true);
+    u.onend = () => { setSpeaking(false); maybeReListen(); };
+    u.onerror = () => { setSpeaking(false); maybeReListen(); };
+    window.speechSynthesis.speak(u);
+  };
+
+  // Encerra o modo de voz por completo (botão "Encerrar áudio").
+  const stopVoice = () => {
+    voiceModeRef.current = false;
+    setVoiceMode(false);
+    setSpeaking(false);
+    try { window.speechSynthesis?.cancel(); } catch { /* ignore */ }
+    stopMic();
   };
 
   const handlePlayClick = () => {
@@ -513,6 +643,9 @@ export function HubView() {
   const runChatTurn = () => {
     setChatBusy(true);
     setIsTyping(true);
+    turnDoneRef.current = false;
+    // Novo turno do usuário corta qualquer fala em andamento.
+    if (voiceModeRef.current) { try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } setSpeaking(false); }
 
     // `fullText` guarda tudo (p/ o histórico); cada rodada (entre ferramentas)
     // vira um balão separado, pra não colar "texto1Texto2".
@@ -527,9 +660,14 @@ export function HubView() {
     const flush = () => {
       rafPending = false;
       const id = roundId;
-      if (id) setMessages(prev => prev.map(m => m.id === id ? { ...m, content: roundText } : m));
+      const text = roundText; // captura o valor — o updater do React roda depois
+      if (id) setMessages(prev => prev.map(m => m.id === id ? { ...m, content: text } : m));
     };
-    const closeRound = () => { flush(); roundId = null; roundText = ""; };
+    const closeRound = () => { flush(); if (roundId && roundText.trim()) speak(roundText); roundId = null; roundText = ""; };
+
+    // Agrupa ferramentas repetidas (ex: 10× criar_card_linear) numa linha de
+    // progresso só: name → id da mensagem + total do grupo.
+    const groups: Record<string, { id: string; total: number }> = {};
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -546,7 +684,8 @@ export function HubView() {
           if (roundId === null) {
             const id = `a${Date.now()}-${seq++}`;
             roundId = id;
-            setMessages(prev => [...prev, { id, role: "assistant", content: roundText }]);
+            const text = roundText; // captura — o updater roda depois
+            setMessages(prev => [...prev, { id, role: "assistant", content: text }]);
           } else if (!rafPending) {
             rafPending = true;
             requestAnimationFrame(flush);
@@ -563,12 +702,31 @@ export function HubView() {
               content: inp?.pergunta ?? "",
               options: Array.isArray(inp?.opcoes) ? inp!.opcoes : [],
             }]);
+            if (inp?.pergunta) speak(inp.pergunta); // lê a pergunta em voz alta
             return;
           }
-          setMessages(prev => [...prev, { id: `t${e.id}`, role: "log", content: `${toolLabel(e.name)}…` }]);
+          // Grupo de ferramentas repetidas: 1 linha de progresso x/total.
+          const total = e.groupTotal ?? 1;
+          if (total > 1) {
+            if (!groups[e.name]) {
+              const gid = `g${e.id}`;
+              groups[e.name] = { id: gid, total };
+              setMessages(prev => [...prev, { id: gid, role: "progress", content: groupLabel(e.name), progressDone: 0, progressTotal: total }]);
+            }
+            return;
+          }
+          setMessages(prev => [...prev, { id: `t${e.id}`, role: "log", content: `${describeTool(e.name, e.input)}…` }]);
         },
         onToolResult: (e) => {
           const r = e.result as { ok?: boolean; artifact?: ArtifactData; branch_id?: string; branch_name?: string } | undefined;
+          // Avança a linha de progresso do grupo (ferramentas repetidas).
+          if ((e.groupTotal ?? 1) > 1 && groups[e.name]) {
+            const g = groups[e.name];
+            const done = e.groupDone ?? 0;
+            setMessages(prev => prev.map(m => m.id === g.id ? { ...m, progressDone: done } : m));
+            if (done >= g.total) delete groups[e.name];
+            return;
+          }
           if (e.name === "selecionar_branch" && r?.ok && r.branch_id) {
             chatBranchRef.current = r.branch_id; // próximas mensagens usam o token dessa branch
             setMessages(prev => [...prev, { id: `br${e.id}`, role: "log", content: `Branch: ${r.branch_name}` }]);
@@ -579,18 +737,22 @@ export function HubView() {
           }
         },
         onDone: () => {
-          flush(); // garante o conteúdo final do último balão
+          closeRound(); // fecha e fala o último balão
           abortRef.current = null;
           setIsTyping(false);
           setChatBusy(false);
+          turnDoneRef.current = true;
           if (fullText.trim()) {
             agentConvoRef.current = [...agentConvoRef.current, { role: "assistant", content: fullText }];
           }
+          void fetchUsage(); // atualiza o consumo do mês após o turno
+          maybeReListen(); // volta a ouvir se nada estiver sendo falado
         },
         onError: (msg) => {
           abortRef.current = null;
           setIsTyping(false);
           setChatBusy(false);
+          turnDoneRef.current = true;
           setMessages(prev => [...prev, { id: `err${Date.now()}`, role: "log", content: `⚠ ${friendlyAgentError(msg)}` }]);
         },
       },
@@ -600,8 +762,11 @@ export function HubView() {
 
   const pickMode = (m: InputMode) => {
     setInput(""); setLinked([]); setSent(false); setSelected(null);
-    if (m === "audio") { setMode("audio"); setPhase("panel"); setAudioPhase("listening"); }
-    else { setMode("text"); startAgentChat(); }
+    if (m === "audio") {
+      setMode("audio"); setPhase("panel"); setAudioPhase("listening");
+      setVoiceMode(true); voiceModeRef.current = true; startedChatRef.current = false;
+    }
+    else { setMode("text"); setVoiceMode(false); voiceModeRef.current = false; startAgentChat(); }
   };
 
   const closePanel = () => { setPhase("idle"); setSelected(null); setInput(""); setLinked([]); setSent(false); };
@@ -695,7 +860,7 @@ export function HubView() {
           setExecEvents(prev => prev.map(e => e.id === assistantId ? { ...e, content: agentBufferRef.current } : e));
         },
         onToolStart: (e) => {
-          setExecEvents(prev => [...prev, { id: `t${e.id}`, type: "log", content: `${toolLabel(e.name)}�?�` }]);
+          setExecEvents(prev => [...prev, { id: `t${e.id}`, type: "log", content: `${describeTool(e.name, e.input)}…` }]);
         },
         onToolResult: (e) => {
           const r = e.result as {
@@ -827,20 +992,27 @@ export function HubView() {
           </motion.div>
         )}
 
-        {/* Hero */}
-        <motion.div layout initial={{ opacity: 0, y: 22 }} animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94], layout: { type: "spring", stiffness: 260, damping: 30 } }}
-          className={cn("text-center", phase === "panel" ? "mb-6" : "mb-12")}
-        >
-          <motion.div
-            animate={{ scale: (phase === "panel" || phase === "chat" || phase === "confirm") ? 0.82 : 1 }}
-            style={{ transformOrigin: "center bottom" }}
-            transition={{ type: "spring", stiffness: 260, damping: 28 }}
-          >
-            <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">O que deseja fazer?</h1>
-            <p className="mx-auto mt-4 max-w-md text-[15px] leading-relaxed text-muted-2">Dê ordens para o maestro trabalhar</p>
-          </motion.div>
-        </motion.div>
+        {/* Hero — colapsa quando a conversa começa, liberando espaço vertical */}
+        <AnimatePresence initial={false}>
+          {phase !== "chat" && phase !== "confirm" && phase !== "executing" && (
+            <motion.div key="hero" layout
+              initial={{ opacity: 0, y: 22 }}
+              animate={{ opacity: 1, y: 0, height: "auto" }}
+              exit={{ opacity: 0, height: 0, marginBottom: 0, y: -8 }}
+              transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94], layout: { type: "spring", stiffness: 260, damping: 30 } }}
+              className={cn("overflow-hidden text-center", phase === "panel" ? "mb-6" : "mb-12")}
+            >
+              <motion.div
+                animate={{ scale: phase === "panel" ? 0.82 : 1 }}
+                style={{ transformOrigin: "center bottom" }}
+                transition={{ type: "spring", stiffness: 260, damping: 28 }}
+              >
+                <h1 className="text-4xl font-bold tracking-tight text-white sm:text-5xl">O que deseja fazer?</h1>
+                <p className="mx-auto mt-4 max-w-md text-[15px] leading-relaxed text-muted-2">Dê ordens para o maestro trabalhar</p>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Stage �?" idle / choosing / panel */}
         <AnimatePresence mode="wait">
@@ -1056,9 +1228,9 @@ export function HubView() {
             <motion.div key="chat"
               initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -12 }}
               transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
-              className="w-full max-w-[480px]">
+              className="w-full max-w-[480px] md:max-w-[640px] lg:max-w-[760px] xl:max-w-[860px]">
 
-              <div className="mb-4 flex max-h-[320px] flex-col gap-3 overflow-y-auto px-1 py-1" style={{ scrollbarWidth: "none" }}>
+              <div className="mb-4 flex max-h-[min(60vh,640px)] flex-col gap-3 overflow-y-auto px-1 py-1" style={{ scrollbarWidth: "none" }}>
                 <AnimatePresence initial={false}>
                   {messages.map((msg) => (
                     <MessageRow key={msg.id} msg={msg} chatBusy={chatBusy} onPick={pickChoice} />
@@ -1082,6 +1254,56 @@ export function HubView() {
                 </AnimatePresence>
                 <div ref={chatEndRef} />
               </div>
+
+              {/* Barra de voz — só no modo áudio: ouvindo / falando / toque pra falar */}
+              <AnimatePresence>
+                {voiceMode && (
+                  <motion.div key="voicebar"
+                    initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 8 }}
+                    transition={{ duration: 0.25 }}
+                    className="mb-2 flex items-center gap-3 rounded-2xl px-3.5 py-2.5"
+                    style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                    <motion.button
+                      onClick={() => { if (micActive) { doAutoSubmitRef.current?.(); } else { void startMic(); } }}
+                      whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.94 }}
+                      title={micActive ? "Concluir fala" : "Falar"}
+                      className="relative flex h-9 w-9 flex-shrink-0 cursor-pointer items-center justify-center rounded-full text-white"
+                      style={{ background: micActive ? `linear-gradient(135deg, ${activeWs.accent}, ${activeWs.accent2})` : "rgba(255,255,255,0.08)" }}>
+                      {micActive && (
+                        <motion.span className="absolute inset-0 rounded-full"
+                          style={{ border: `2px solid ${activeWs.accent}` }}
+                          animate={{ scale: [1, 1.45], opacity: [0.6, 0] }}
+                          transition={{ duration: 1.2, repeat: Infinity, ease: "easeOut" }} />
+                      )}
+                      <Icon name={micActive ? "Mic" : speaking ? "Volume2" : "Mic"} size={15} strokeWidth={2} />
+                    </motion.button>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-medium" style={{ color: micActive ? activeWs.accent : speaking ? "#34d399" : "rgba(255,255,255,0.5)" }}>
+                        {micActive ? "Ouvindo…" : speaking ? "Maestro falando…" : "Toque o microfone para falar"}
+                      </p>
+                      {micActive && transcript && (
+                        <p className="truncate text-[12px] text-white/70">{transcript}</p>
+                      )}
+                      {speaking && (
+                        <div className="mt-1 flex items-center gap-0.5">
+                          {[0, 1, 2, 3, 4].map((i) => (
+                            <motion.span key={i} className="w-0.5 rounded-full bg-emerald-400/70"
+                              animate={{ height: [3, 11, 3] }}
+                              transition={{ duration: 0.7, repeat: Infinity, delay: i * 0.1, ease: "easeInOut" }} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <button onClick={stopVoice}
+                      className="flex flex-shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] text-white/45 transition-colors hover:text-white/80"
+                      style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                      <Icon name="X" size={11} strokeWidth={2.5} /> Encerrar
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
 
               <div className="flex flex-col gap-2 rounded-2xl px-4 py-2.5"
                 style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.1)" }}>
@@ -1129,8 +1351,27 @@ export function HubView() {
                 </div>
               </div>
 
+              {/* Medidor de uso real do mês — abaixo da barra, no canto direito */}
+              <AnimatePresence>
+                {usage && (usage.tokensUsed > 0 || usage.costUsd > 0) && (
+                  <motion.div key="usage"
+                    initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                    transition={{ duration: 0.3 }}
+                    title="Consumo real deste mês através do Maestro (todas as branches). Estimado pelos tokens × tabela de preços da Anthropic."
+                    className="mt-2 flex items-center justify-end gap-2 px-1 text-[10.5px] text-white/35">
+                    <span className="flex items-center gap-1">
+                      <Icon name="Zap" size={10} strokeWidth={2} className="text-white/30" />
+                      {fmtTokens(usage.tokensUsed)} tokens
+                    </span>
+                    <span className="text-white/15">·</span>
+                    <span>{fmtUsd(usage.costUsd)}</span>
+                    <span className="text-white/25">este mês</span>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
               <div className="mt-3 flex justify-center">
-                <button onClick={() => { abortRef.current?.abort(); abortRef.current = null; setPhase("idle"); }} className="cursor-pointer text-xs text-white/30 transition-colors hover:text-white/60">
+                <button onClick={() => { abortRef.current?.abort(); abortRef.current = null; stopVoice(); setPhase("idle"); }} className="cursor-pointer text-xs text-white/30 transition-colors hover:text-white/60">
                   Cancelar
                 </button>
               </div>

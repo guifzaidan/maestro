@@ -13,8 +13,8 @@ export interface AgentMessage {
 
 export interface AgentHandlers {
   onText?: (delta: string) => void;
-  onToolStart?: (e: { id: string; name: string; input: unknown }) => void;
-  onToolResult?: (e: { id: string; name: string; result: unknown }) => void;
+  onToolStart?: (e: { id: string; name: string; input: unknown; groupTotal?: number; groupIndex?: number }) => void;
+  onToolResult?: (e: { id: string; name: string; result: unknown; groupTotal?: number; groupDone?: number }) => void;
   onDone?: () => void;
   onError?: (msg: string) => void;
 }
@@ -99,6 +99,66 @@ const TOOL_LABELS: Record<string, string> = {
 
 export function toolLabel(name: string): string {
   return TOOL_LABELS[name] ?? name;
+}
+
+/* ── Descrições contextuais das ações do maestro ───────────────── */
+
+function short(v: unknown, n = 42): string {
+  const s = String(v ?? "").replace(/\s+/g, " ").trim();
+  return s.length > n ? `${s.slice(0, n - 1)}…` : s;
+}
+
+/** Extrai o nome da tabela de um SELECT … FROM <tabela>. */
+function tableFromSql(sql: unknown): string | null {
+  const m = /\bfrom\s+["'`]?([a-zA-Z_][\w]*)/i.exec(String(sql ?? ""));
+  return m ? m[1] : null;
+}
+
+/**
+ * Descrição inteligente de UMA ação, usando o input da ferramenta — reflete o
+ * que está sendo feito (título do card, time/projeto, arquivo, tabela…).
+ */
+export function describeTool(name: string, input: unknown): string {
+  const i = (input ?? {}) as Record<string, unknown>;
+  switch (name) {
+    case "criar_tarefa":
+      return i.title ? `Criando tarefa “${short(i.title, 40)}”` : "Criando tarefa";
+    case "consultar_tarefas":
+      return i.todas ? "Lendo tarefas de todas as branches" : "Lendo as tarefas";
+    case "listar_bases_de_dados":
+      return "Explorando as bases de dados";
+    case "consultar_base_de_dados": {
+      const t = tableFromSql(i.sql);
+      return t ? `Consultando a tabela ${t}` : "Consultando a base de dados";
+    }
+    case "listar_linear":
+      if (i.projeto) return `Lendo o Linear · projeto ${short(i.projeto, 24)}`;
+      if (i.time) return `Lendo o Linear · time ${short(i.time, 24)}`;
+      return "Lendo o Linear";
+    case "criar_card_linear": {
+      const titulo = i.titulo ? `“${short(i.titulo, 36)}”` : "card";
+      const onde = i.projeto ? ` em ${short(i.projeto, 20)}` : i.time ? ` em ${short(i.time, 20)}` : "";
+      return `Criando ${titulo}${onde} no Linear`;
+    }
+    case "gerar_artefato": {
+      const nome = i.nome ? String(i.nome) : "arquivo";
+      const ext = i.formato ? `.${i.formato}` : "";
+      return `Gerando ${short(`${nome}${ext}`, 40)}`;
+    }
+    default:
+      return TOOL_LABELS[name] ?? name;
+  }
+}
+
+/** Rótulo agregado pra um lote da mesma ferramenta (plural). */
+export function groupLabel(name: string): string {
+  switch (name) {
+    case "criar_card_linear": return "Criando cards no Linear";
+    case "criar_tarefa": return "Criando tarefas";
+    case "consultar_base_de_dados": return "Consultando as bases de dados";
+    case "gerar_artefato": return "Gerando arquivos";
+    default: return TOOL_LABELS[name] ?? name;
+  }
 }
 
 /** Converte erros técnicos do agente em mensagens claras em PT-BR. */

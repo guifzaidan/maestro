@@ -88,6 +88,8 @@ export async function POST(request: Request) {
             system,
             messages: convo,
             tools,
+            // Sonnet 4.6 com esforço médio — bom equilíbrio custo/qualidade.
+            output_config: { effort: "medium" },
           });
 
           ms.on("text", (delta) => emit({ type: "text", delta }));
@@ -109,16 +111,24 @@ export async function POST(request: Request) {
 
           if (final.stop_reason !== "tool_use" || toolUses.length === 0) break;
 
+          // Quantas chamadas de cada ferramenta nesta rodada (p/ o front agrupar
+          // ferramentas repetidas numa linha só com progresso x/total).
+          const groupTotals: Record<string, number> = {};
+          for (const tu of toolUses) groupTotals[tu.name] = (groupTotals[tu.name] ?? 0) + 1;
+          const groupSeen: Record<string, number> = {};
+
           const results: Anthropic.ToolResultBlockParam[] = [];
           for (const tu of toolUses) {
-            emit({ type: "tool_start", id: tu.id, name: tu.name, input: tu.input });
+            const groupTotal = groupTotals[tu.name];
+            const groupIndex = (groupSeen[tu.name] = (groupSeen[tu.name] ?? 0) + 1);
+            emit({ type: "tool_start", id: tu.id, name: tu.name, input: tu.input, groupTotal, groupIndex });
             let result: unknown;
             try {
               result = await executeTool(tu.name, tu.input as Record<string, unknown>, ctx);
             } catch (e) {
               result = { ok: false, error: e instanceof Error ? e.message : String(e) };
             }
-            emit({ type: "tool_result", id: tu.id, name: tu.name, result });
+            emit({ type: "tool_result", id: tu.id, name: tu.name, result, groupTotal, groupDone: groupIndex });
             results.push({ type: "tool_result", tool_use_id: tu.id, content: JSON.stringify(result) });
           }
           convo.push({ role: "user", content: results });

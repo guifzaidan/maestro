@@ -70,3 +70,18 @@ export async function getMonthlyUsage(branch: string): Promise<MonthlyUsage> {
   const row = rows[0];
   return { tokensUsed: Number(row?.tokens ?? 0), costUsd: Number(row?.cost ?? 0) };
 }
+
+/** Soma tokens e custo do mês corrente de TODAS as branches (consumo global). */
+export async function getTotalMonthlyUsage(): Promise<MonthlyUsage> {
+  await ensureSchema();
+  const since = startOfMonth();
+  const rows = await db
+    .select({
+      tokens: sql<number>`COALESCE(SUM(${usage.inputTokens} + ${usage.outputTokens}), 0)`,
+      cost: sql<number>`COALESCE(SUM(${usage.costUsd}), 0)`,
+    })
+    .from(usage)
+    .where(gte(usage.createdAt, since));
+  const row = rows[0];
+  return { tokensUsed: Number(row?.tokens ?? 0), costUsd: Number(row?.cost ?? 0) };
+}
