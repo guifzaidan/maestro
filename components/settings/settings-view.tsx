@@ -140,7 +140,24 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
       const tokenChanged = !!tokenInput.trim();
       setTokenInput("");
       await reloadBranches();
-      toast(tokenChanged ? `Token da ${w.name} salvo` : `Identidade da ${w.name} salva`, "success");
+
+      if (!tokenChanged) {
+        toast(`Identidade da ${w.name} salva`, "success");
+        return;
+      }
+
+      // Token novo → valida de verdade contra a API da Claude e dá feedback.
+      const check = await fetch("/api/branches/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: w.id }),
+      }).then((r) => r.json()).catch(() => ({ ok: false, error: "falha ao testar" }));
+
+      if (check.ok) {
+        toast(`Conectado à Claude · ${w.name}`, "success");
+      } else {
+        toast(`Token salvo, mas não conectou: ${check.error}`, "error");
+      }
     } catch {
       toast("Falha ao salvar", "error");
     } finally {
