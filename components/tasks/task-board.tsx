@@ -113,7 +113,7 @@ export function TaskBoard() {
   const { toast } = useToast();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState<View>("semana");
+  const [view, setView] = useState<View>("hoje");
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [editTarget, setEditTarget] = useState<Task | null>(null);
   const [recurringOpen, setRecurringOpen] = useState(false);
