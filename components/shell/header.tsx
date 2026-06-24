@@ -122,8 +122,8 @@ export function Header() {
         </nav>
 
         <div className="ml-auto flex items-center gap-2.5">
-          {/* Context switcher — oculto só quando a página pede (ex: aba Branchs) */}
-          {!hideContextSwitcher && (
+          {/* Context switcher — oculto na home e quando a página pede (ex: aba Branchs) */}
+          {pathname !== "/" && !hideContextSwitcher && (
           <div className="relative">
             <motion.button
               whileHover={{ scale: 1.02 }}

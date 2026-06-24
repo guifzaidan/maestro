@@ -5,32 +5,26 @@ import { listTursoTargets, type TursoTarget } from "@/lib/db/connections";
 import { introspectTurso } from "@/lib/turso-introspect";
 import { queryTurso } from "@/lib/turso-query";
 import { buildArtifact, type ArtifactFormat } from "./artifacts";
-import { BRANCH_IDS } from "@/lib/theme";
 
-/** Contexto de execução de uma ferramenta — sabe a branch ativa. */
+/** Contexto de execução de uma ferramenta — a branch ativa pode ser vazia (home). */
 export interface ToolContext {
   branch: string;
 }
 
-/**
- * Monta as definições de ferramenta enviadas à Claude. É dinâmico: o enum de
- * branches vem do banco, então branches novas (ex: ChipTech) são reconhecidas.
- */
-export async function buildTools(): Promise<Anthropic.Tool[]> {
-  const branches = await listBranches();
-  const branchIds = branches.map((b) => b.id);
-  const branchEnum = branchIds.length > 0 ? branchIds : [BRANCH_IDS.pessoal];
+const BRANCH_DESC = "Branch alvo — pode ser o nome (ex: 'DUX', 'Sheep Tech') ou o id. Obrigatório se não houver branch ativa.";
 
+/** Monta as definições de ferramenta enviadas à Claude. */
+export async function buildTools(): Promise<Anthropic.Tool[]> {
   return [
     {
       name: "criar_tarefa",
       description:
-        "Cria uma tarefa no hub e persiste no banco. Use quando o usuário quer registrar algo para fazer depois (não execução imediata). Se a branch não for dita, use a branch ativa.",
+        "Cria uma tarefa no hub e persiste no banco. Use quando o usuário quer registrar algo para fazer depois (não execução imediata).",
       input_schema: {
         type: "object",
         properties: {
           title: { type: "string", description: "Título curto e claro da tarefa" },
-          branch: { type: "string", enum: branchEnum, description: "Branch da tarefa. Omita para usar a branch ativa." },
+          branch: { type: "string", description: BRANCH_DESC },
           due: { type: "string", description: "Prazo no formato dd/mm/aaaa. Opcional." },
           list: { type: "string", enum: ["seg", "ter", "qua", "qui", "sex", "sab", "dom"], description: "Dia da semana. Opcional." },
           tools: { type: "array", items: { type: "string" }, description: "Ferramentas/conectores relevantes. Opcional." },
@@ -45,7 +39,7 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
       input_schema: {
         type: "object",
         properties: {
-          branch: { type: "string", enum: branchEnum, description: "Filtrar por branch. Omita para a branch ativa." },
+          branch: { type: "string", description: BRANCH_DESC + " Omita se usar todas=true." },
           todas: { type: "boolean", description: "true = todas as branches (ignora o filtro). Opcional." },
         },
       },
@@ -53,10 +47,11 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
     {
       name: "listar_bases_de_dados",
       description:
-        "Lista as bases de dados (Turso) conectadas à branch ativa, com suas tabelas, colunas e contagem de linhas. Use ISSO PRIMEIRO antes de consultar dados, para descobrir o schema.",
+        "Lista as bases de dados (Turso) conectadas a uma branch, com suas tabelas, colunas e contagem de linhas. Use ISSO PRIMEIRO antes de consultar dados, para descobrir o schema.",
       input_schema: {
         type: "object",
         properties: {
+          branch: { type: "string", description: BRANCH_DESC },
           incluir_schema: { type: "boolean", description: "Incluir colunas de cada tabela (padrão true)." },
         },
       },
@@ -64,10 +59,11 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
     {
       name: "consultar_base_de_dados",
       description:
-        "Executa uma consulta SQL SELECT (read-only) numa base de dados conectada à branch e retorna as linhas. Use o schema de listar_bases_de_dados para montar o SQL. Máx. 500 linhas.",
+        "Executa uma consulta SQL SELECT (read-only) numa base de dados conectada a uma branch e retorna as linhas. Use o schema de listar_bases_de_dados para montar o SQL. Máx. 500 linhas.",
       input_schema: {
         type: "object",
         properties: {
+          branch: { type: "string", description: BRANCH_DESC },
           conexao_id: { type: "string", description: "Id da conexão (de listar_bases_de_dados). Omita se houver só uma base." },
           sql: { type: "string", description: "Uma única consulta SELECT/WITH. Sem INSERT/UPDATE/DELETE/DDL." },
         },
@@ -99,6 +95,19 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
 
 type ToolInput = Record<string, unknown>;
 
+/** Resolve uma branch por id, nome ou short (case-insensitive). null se não achar. */
+async function resolveBranchId(value: string | undefined | null): Promise<string | null> {
+  const v = (value ?? "").trim();
+  if (!v) return null;
+  const branches = await listBranches();
+  if (branches.some((b) => b.id === v)) return v;
+  const lc = v.toLowerCase();
+  const exact = branches.find((b) => b.name.toLowerCase() === lc || b.short.toLowerCase() === lc);
+  if (exact) return exact.id;
+  const partial = branches.find((b) => b.name.toLowerCase().includes(lc));
+  return partial?.id ?? null;
+}
+
 /** Resume um TursoTarget + tabelas para o agente (sem expor o token). */
 async function describeTarget(t: TursoTarget, includeSchema: boolean) {
   try {
@@ -121,9 +130,11 @@ async function describeTarget(t: TursoTarget, includeSchema: boolean) {
 export async function executeTool(name: string, input: ToolInput, ctx: ToolContext): Promise<unknown> {
   switch (name) {
     case "criar_tarefa": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário em qual branch criar essa tarefa." };
       const task = await createTask({
         title: String(input.title ?? ""),
-        branch: String(input.branch ?? ctx.branch),
+        branch,
         due: (input.due as string) ?? null,
         list: (input.list as string) ?? null,
         tools: (input.tools as string[]) ?? null,
@@ -134,14 +145,17 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
 
     case "consultar_tarefas": {
       const all = await listTasks();
-      const todas = input.todas === true;
-      const br = (input.branch as string) ?? ctx.branch;
-      const filtered = todas ? all : all.filter((t) => t.branch === br);
+      if (input.todas === true) return { ok: true, count: all.length, tasks: all };
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte de qual branch (ou use todas=true)." };
+      const filtered = all.filter((t) => t.branch === branch);
       return { ok: true, count: filtered.length, tasks: filtered };
     }
 
     case "listar_bases_de_dados": {
-      const targets = await listTursoTargets(ctx.branch);
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch quer ver as bases." };
+      const targets = await listTursoTargets(branch);
       if (targets.length === 0) {
         return { ok: true, bases: [], nota: "Nenhuma base de dados Turso conectada a esta branch." };
       }
@@ -151,7 +165,9 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
     }
 
     case "consultar_base_de_dados": {
-      const targets = await listTursoTargets(ctx.branch);
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch consultar." };
+      const targets = await listTursoTargets(branch);
       if (targets.length === 0) return { ok: false, error: "Nenhuma base Turso conectada a esta branch." };
       const target = input.conexao_id
         ? targets.find((t) => t.id === input.conexao_id)

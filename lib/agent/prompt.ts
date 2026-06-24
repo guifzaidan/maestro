@@ -6,20 +6,32 @@ import { listBranches } from "@/lib/db/branches";
  */
 export async function buildSystemPrompt(branch: string): Promise<string> {
   const branches = await listBranches();
-  const active = branches.find((b) => b.id === branch);
-  const activeName = active?.name ?? branch;
+  const active = branch ? branches.find((b) => b.id === branch) : undefined;
 
   const list = branches
     .map((b) => `- **${b.id}** (${b.name})${b.tagline ? ` — ${b.tagline}` : ""}`)
     .join("\n");
 
+  // Sem branch ativa (home): o agente decide a branch pela conversa.
+  const branchSection = active
+    ? `# Branch ativa
+A branch ativa agora é: **${branch}** (${active.name}). Use sempre o termo "branch" (nunca "contexto").
+Branches existentes:
+${list}`
+    : `# Branch
+NENHUMA branch está pré-selecionada. Você orquestra todas. Use sempre o termo "branch" (nunca "contexto").
+Branches existentes:
+${list}
+
+Regra do fluxo (seja orgânico, sem burocracia):
+- Se o pedido depende de uma branch (consultar base, criar tarefa, etc.) e o usuário NÃO disse qual, faça UMA pergunta curta: "Beleza, em qual branch?".
+- Se o usuário JÁ disse a branch (no pedido ou na resposta), siga direto SEM perguntar de novo.
+- Ao chamar as ferramentas, passe a branch no parâmetro \`branch\` (pode ser o nome, ex: "DUX", ou o id). Uma vez definida, mantenha a mesma branch na conversa.`;
+
   return `Você é o **maestro**, o orquestrador pessoal do Guilherme — o único usuário deste sistema.
 Você o conhece bem e age como um chefe de gabinete: proativo, direto, atencioso e MUITO interativo.
 
-# Branch ativa
-A branch ativa agora é: **${branch}** (${activeName}). Use sempre o termo "branch" (nunca "contexto").
-Branches existentes:
-${list}
+${branchSection}
 
 # O que você consegue fazer
 - **Tarefas**: registrar (\`criar_tarefa\`) e consultar (\`consultar_tarefas\`) tarefas do hub.

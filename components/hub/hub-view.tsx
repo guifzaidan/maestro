@@ -218,7 +218,7 @@ export function HubView() {
     setMessages([{
       id: "greet",
       role: "assistant",
-      content: `Olá! Estou na branch ${activeWs.name}. Me conta o que você precisa — pode descrever do seu jeito, eu cuido do resto.`,
+      content: `Olá! Me conta o que você precisa — pode descrever do seu jeito. Se for sobre uma branch específica, é só dizer qual; senão eu pergunto.`,
     }]);
     setPhase("chat");
   };
@@ -241,8 +241,9 @@ export function HubView() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
+    // Home: sem branch pré-selecionada — o agente pergunta/decide pela conversa.
     streamAgent(
-      { branch: active, messages: agentConvoRef.current },
+      { branch: "", messages: agentConvoRef.current },
       {
         onText: (delta) => {
           agentBufferRef.current += delta;
