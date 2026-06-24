@@ -42,7 +42,8 @@ export function ConnectorsList({ withScopeFilter = false }: { withScopeFilter?: 
   // DB é a fonte da verdade quando há registro; senão cai no estado mock.
   // IDs de conexões não-DB são compostos: `${connectorId}--${branch}`.
   const isConnected = (c: Connector) => {
-    if (c.category === "db") return false;
+    // Conector de banco: ativo se há ao menos uma conexão salva nesta branch.
+    if (c.category === "db") return persisted.some((p) => p.connector === c.id);
     const row = persisted.find((p) => p.id === `${c.id}--${active}`);
     return row ? row.connected : c.connected;
   };
@@ -113,6 +114,8 @@ function ConnectorCard({
   useEffect(() => { setConnected(self?.connected ?? connector.connected); }, [self?.connected, connector.connected]);
 
   const isDb = connector.category === "db";
+  // Banco não tem toggle próprio: fica "Ativo" quando há conexões salvas na branch.
+  const active = isDb ? tursoRows.length > 0 : connected;
 
   const persist = async (nextConnected: boolean) => {
     setSaving(true);
@@ -136,14 +139,14 @@ function ConnectorCard({
   };
 
   return (
-    <div className={cn("glass rounded-2xl overflow-hidden", connected && "glow")}>
+    <div className={cn("glass rounded-2xl overflow-hidden", active && "glow")}>
       {/* Row */}
       <button
         onClick={onToggle}
         className="flex w-full items-center gap-4 px-4 py-3 text-left transition-colors hover:bg-white/[0.02]"
       >
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--surface-2)]">
-          <Icon name={connector.icon} size={17} style={{ color: connected ? "var(--accent)" : undefined }} />
+          <Icon name={connector.icon} size={17} style={{ color: active ? "var(--accent)" : undefined }} />
         </span>
 
         <div className="min-w-0 flex-1">
@@ -153,12 +156,12 @@ function ConnectorCard({
 
         <span className={cn(
           "flex shrink-0 items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium",
-          connected
+          active
             ? "bg-emerald-400/10 text-emerald-400"
             : "bg-white/[0.04] text-muted-2"
         )}>
-          <span className={cn("h-1.5 w-1.5 rounded-full", connected ? "bg-emerald-400 pulse-dot" : "bg-zinc-600")} style={connected ? { color: "#34d399" } : undefined} />
-          {connected ? "Ativo" : "Inativo"}
+          <span className={cn("h-1.5 w-1.5 rounded-full", active ? "bg-emerald-400 pulse-dot" : "bg-zinc-600")} style={active ? { color: "#34d399" } : undefined} />
+          {active ? "Ativo" : "Inativo"}
         </span>
 
         <motion.span
