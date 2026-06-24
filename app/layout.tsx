@@ -23,7 +23,7 @@ const sacramento = Sacramento({
 
 export const metadata: Metadata = {
   title: "maestro",
-  description: "Orquestrador multi-contexto para reger tarefas, agentes e integrações.",
+  description: "Orquestrador multi-branch para reger tarefas, agentes e integrações.",
 };
 
 export default function RootLayout({

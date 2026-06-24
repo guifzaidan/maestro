@@ -959,7 +959,7 @@ function EditTaskModal({ task, onSave, onCancel, onDelete }: {
             <textarea
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Detalhes, contexto, notas…"
+              placeholder="Detalhes, observações, notas…"
               rows={3}
               className="w-full resize-none rounded-xl px-3.5 py-2.5 text-[13px] text-white/90 outline-none placeholder:text-white/25 transition-colors"
               style={FIELD_STYLE}

@@ -218,7 +218,7 @@ export function HubView() {
     setMessages([{
       id: "greet",
       role: "assistant",
-      content: `Olá! Estou no contexto da ${activeWs.name}. Me conta o que você precisa — pode descrever do seu jeito, eu cuido do resto.`,
+      content: `Olá! Estou na branch ${activeWs.name}. Me conta o que você precisa — pode descrever do seu jeito, eu cuido do resto.`,
     }]);
     setPhase("chat");
   };
@@ -920,7 +920,7 @@ export function HubView() {
                   <div className="flex items-center gap-3">
                     <input ref={execInputRef} value={execInput} onChange={e => setExecInput(e.target.value)}
                       onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendExecMessage(); } }}
-                      placeholder={execWaiting ? "Responda o maestro..." : "Adicionar contexto..."}
+                      placeholder={execWaiting ? "Responda o maestro..." : "Adicionar detalhes..."}
                       autoFocus
                       className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/25" />
                     <motion.button onClick={sendExecMessage} disabled={!execInput.trim()}

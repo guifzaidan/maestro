@@ -17,7 +17,7 @@ export const CONNECTORS: Connector[] = [
   {
     id: "claude",
     name: "Claude API",
-    description: "Token por contexto — DUX, Sheep e Pessoal usam keys distintas.",
+    description: "Token por branch — DUX, Sheep e Pessoal usam keys distintas.",
     icon: "Sparkles",
     connected: false,
     scopes: ALL_BRANCHES,
@@ -53,7 +53,7 @@ export const CONNECTORS: Connector[] = [
   {
     id: "turso",
     name: "Turso (SQLite)",
-    description: "Bancos de dados SQLite na edge — múltiplas conexões por contexto.",
+    description: "Bancos de dados SQLite na edge — múltiplas conexões por branch.",
     icon: "Database",
     connected: false,
     scopes: ALL_BRANCHES,
@@ -71,7 +71,7 @@ export const CONNECTORS: Connector[] = [
   {
     id: "gcalendar",
     name: "Google Calendar",
-    description: "Sincronização de eventos e compromissos por contexto.",
+    description: "Sincronização de eventos e compromissos por branch.",
     icon: "CalendarDays",
     connected: false,
     scopes: ALL_BRANCHES,
