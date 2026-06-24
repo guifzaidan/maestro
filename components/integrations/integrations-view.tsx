@@ -316,11 +316,24 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
     save(id, { mode });
   };
 
+  /** Testa a conexão (introspect) e dá feedback positivo/negativo em toast. */
+  const validate = async (id: string, name: string) => {
+    const label = name?.trim() ? ` · ${name.trim()}` : "";
+    const res = await introspectConnection({ id });
+    if (res.error) {
+      toast(`Não conectou${label}: ${res.error}`, "error");
+    } else {
+      const n = res.tables?.length ?? 0;
+      toast(`Conectado${label} · ${n} tabela${n === 1 ? "" : "s"}`, "success");
+    }
+  };
+
   const save = async (id: string, override?: Partial<DbRow>) => {
     const base = conns.find((x) => x.id === id);
     if (!base) return;
     const c = { ...base, ...override };
     if (!c.name && !c.url && !tokens[id] && c.selected.length === 0) return; // nada pra salvar
+    const hadNewToken = !!tokens[id]; // token recém-digitado → vale validar a conexão
     try {
       await saveConnection({
         id,
@@ -333,6 +346,8 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
       setConns((prev) => prev.map((x) => (x.id === id ? { ...c, persisted: true, hasSecret: x.hasSecret || !!tokens[id] } : x)));
       setTokens((prev) => ({ ...prev, [id]: "" }));
       onChanged();
+      // Confirma que a conexão realmente funciona quando há url + token novo.
+      if (hadNewToken && c.url) validate(id, c.name);
     } catch (e) {
       toast(e instanceof Error ? e.message : "Falha ao salvar conexão", "delete");
     }
@@ -356,6 +371,7 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
     } else {
       const tables = res.tables ?? [];
       setTablesByConn((p) => ({ ...p, [id]: { loading: false, error: null, tables } }));
+      toast(`Conectado · ${tables.length} tabela${tables.length === 1 ? "" : "s"}`, "success");
       // Para seleções já salvas sem mapeamento, deriva um agora.
       const selected = selRef.current[id] ?? [];
       const cur = mapRef.current[id] ?? {};
