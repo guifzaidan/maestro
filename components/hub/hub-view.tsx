@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, type ReactNode } from "react";
+import { useState, useRef, useEffect, useCallback, memo, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { Icon } from "@/components/ui/icon";
@@ -81,6 +81,80 @@ function downloadArtifact(a: ArtifactData) {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+/**
+ * Uma linha do chat (balão / log / artefato / escolha). MEMOIZADO: durante o
+ * streaming só re-renderiza o balão cujo conteúdo mudou — os outros (incl. os
+ * grandes, com blur) ficam parados, mantendo o glass fluido.
+ */
+const MessageRow = memo(function MessageRow({ msg, chatBusy, onPick }: {
+  msg: ChatMessage;
+  chatBusy: boolean;
+  onPick: (id: string, opt: string) => void;
+}) {
+  if (msg.role === "log") return (
+    <motion.div initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
+      transition={{ duration: 0.2 }} className="flex items-center gap-2 pl-1">
+      <span className="h-1 w-1 flex-shrink-0 rounded-full bg-white/25" />
+      <span className="text-[12px] text-white/40">{msg.content}</span>
+    </motion.div>
+  );
+
+  if (msg.role === "artifact" && msg.artifact) return (
+    <motion.button onClick={() => downloadArtifact(msg.artifact!)}
+      initial={{ opacity: 0, y: 8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+      whileHover={{ scale: 1.015, borderColor: "rgba(255,255,255,0.28)" }} whileTap={{ scale: 0.985 }}
+      transition={{ type: "spring", stiffness: 300, damping: 26 }}
+      className="group flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3.5 py-3 text-left"
+      style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.14)" }}>
+      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(255,255,255,0.10)" }}>
+        <Icon name="FileText" size={16} strokeWidth={1.75} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium text-white/90">{msg.artifact.filename}</p>
+        <p className="text-[11px] text-white/40">{(msg.artifact.format ?? "arquivo").toUpperCase()} · {(msg.artifact.bytes / 1024).toFixed(1)} KB · baixar</p>
+      </div>
+      <Icon name="Download" size={16} className="flex-shrink-0 text-white/40 transition-colors group-hover:text-white/80" />
+    </motion.button>
+  );
+
+  if (msg.role === "choice") return (
+    <motion.div initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: "spring", stiffness: 300, damping: 28 }} className="flex flex-col items-start gap-2">
+      {msg.content && (
+        <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed"
+          style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.78)" }}>
+          {renderInline(msg.content)}
+        </div>
+      )}
+      {(msg.options ?? []).length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {msg.options!.map((opt, i) => (
+            <motion.button key={i} onClick={() => onPick(msg.id, opt)} disabled={chatBusy}
+              whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+              className="cursor-pointer rounded-full px-3.5 py-1.5 text-[13px] font-medium text-white/90 transition-colors disabled:opacity-40"
+              style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.16)" }}>
+              {opt}
+            </motion.button>
+          ))}
+        </div>
+      )}
+    </motion.div>
+  );
+
+  // Balão de conversa (user / assistant).
+  return (
+    <motion.div initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+      transition={{ type: "spring", stiffness: 300, damping: 28 }}
+      className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
+      <div className={cn("max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed", msg.role === "user" ? "rounded-br-sm" : "rounded-bl-sm")}
+        style={msg.role === "user" ? { background: "rgba(255,255,255,0.10)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff" }
+          : { background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.78)" }}>
+        {msg.role === "assistant" ? (msg.content ? renderInline(msg.content) : "…") : msg.content}
+      </div>
+    </motion.div>
+  );
+});
 
 type Phase = "idle" | "choosing" | "panel" | "chat" | "confirm" | "executing";
 type InputMode = "text" | "audio";
@@ -431,12 +505,15 @@ export function HubView() {
     sendText(text);
   };
 
+  // Ref pro sendText mais recente, pra manter pickChoice estável (memoização).
+  const sendTextRef = useRef(sendText);
+  sendTextRef.current = sendText;
+
   /** Clique numa opção de escolha: remove os botões daquela pergunta e envia. */
-  const pickChoice = (msgId: string, opt: string) => {
-    if (chatBusy) return;
+  const pickChoice = useCallback((msgId: string, opt: string) => {
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, options: [] } : m));
-    sendText(opt);
-  };
+    sendTextRef.current(opt);
+  }, []);
 
   // Drives one agent turn: streams text + tool events, accumulates the
   // assistant reply into the conversation history when the turn ends.
@@ -830,73 +907,9 @@ export function HubView() {
 
               <div className="mb-4 flex max-h-[320px] flex-col gap-3 overflow-y-auto px-1 py-1" style={{ scrollbarWidth: "none" }}>
                 <AnimatePresence initial={false}>
-                  {messages.map((msg) => {
-                    // Log de ferramenta — linha discreta.
-                    if (msg.role === "log") return (
-                      <motion.div key={msg.id} initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
-                        transition={{ duration: 0.2 }} className="flex items-center gap-2 pl-1">
-                        <span className="h-1 w-1 flex-shrink-0 rounded-full bg-white/25" />
-                        <span className="text-[12px] text-white/40">{msg.content}</span>
-                      </motion.div>
-                    );
-                    // Artefato — card clicável de download.
-                    if (msg.role === "artifact" && msg.artifact) return (
-                      <motion.button key={msg.id} onClick={() => downloadArtifact(msg.artifact!)}
-                        initial={{ opacity: 0, y: 8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
-                        whileHover={{ scale: 1.015, borderColor: "rgba(255,255,255,0.28)" }} whileTap={{ scale: 0.985 }}
-                        transition={{ type: "spring", stiffness: 300, damping: 26 }}
-                        className="group flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3.5 py-3 text-left"
-                        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)" }}>
-                        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(255,255,255,0.10)" }}>
-                          <Icon name="FileText" size={16} strokeWidth={1.75} />
-                        </span>
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-sm font-medium text-white/90">{msg.artifact.filename}</p>
-                          <p className="text-[11px] text-white/40">{(msg.artifact.format ?? "arquivo").toUpperCase()} · {(msg.artifact.bytes / 1024).toFixed(1)} KB · baixar</p>
-                        </div>
-                        <Icon name="Download" size={16} className="flex-shrink-0 text-white/40 transition-colors group-hover:text-white/80" />
-                      </motion.button>
-                    );
-                    // Pergunta com opções clicáveis (choice).
-                    if (msg.role === "choice") return (
-                      <motion.div key={msg.id}
-                        initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
-                        transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                        className="flex flex-col items-start gap-2">
-                        {msg.content && (
-                          <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed"
-                            style={{ background: "rgba(28,28,32,0.62)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.82)" }}>
-                            {renderInline(msg.content)}
-                          </div>
-                        )}
-                        {(msg.options ?? []).length > 0 && (
-                          <div className="flex flex-wrap gap-2">
-                            {msg.options!.map((opt, i) => (
-                              <motion.button key={i} onClick={() => pickChoice(msg.id, opt)} disabled={chatBusy}
-                                whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
-                                className="cursor-pointer rounded-full px-3.5 py-1.5 text-[13px] font-medium text-white/90 transition-colors disabled:opacity-40"
-                                style={{ background: "rgba(255,255,255,0.08)", border: "1px solid rgba(255,255,255,0.16)" }}>
-                                {opt}
-                              </motion.button>
-                            ))}
-                          </div>
-                        )}
-                      </motion.div>
-                    );
-                    // Balão de conversa (user / assistant).
-                    return (
-                      <motion.div key={msg.id}
-                        initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
-                        transition={{ type: "spring", stiffness: 300, damping: 28 }}
-                        className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
-                        <div className={cn("max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed", msg.role === "user" ? "rounded-br-sm" : "rounded-bl-sm")}
-                          style={msg.role === "user" ? { background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff" }
-                            : { background: "rgba(28,28,32,0.62)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.82)" }}>
-                          {msg.role === "assistant" ? (msg.content ? renderInline(msg.content) : "…") : msg.content}
-                        </div>
-                      </motion.div>
-                    );
-                  })}
+                  {messages.map((msg) => (
+                    <MessageRow key={msg.id} msg={msg} chatBusy={chatBusy} onPick={pickChoice} />
+                  ))}
                 </AnimatePresence>
 
                 <AnimatePresence>
@@ -918,7 +931,7 @@ export function HubView() {
               </div>
 
               <div className="flex items-end gap-3 rounded-2xl px-4 py-2.5"
-                style={{ background: "rgba(28,28,32,0.62)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.1)" }}>
                 <textarea ref={chatInputRef} value={chatInput} onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
                   placeholder={chatBusy ? "Maestro está respondendo…" : "Descreva o que precisa…"} autoFocus disabled={chatBusy}
