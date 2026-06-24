@@ -84,7 +84,8 @@ export async function POST(request: Request) {
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
           const ms = client.messages.stream({
             model: MODEL,
-            max_tokens: 4096,
+            // Alto o bastante pra um HTML de dashboard caber inteiro (streaming).
+            max_tokens: 16000,
             system,
             messages: convo,
             tools,
@@ -93,6 +94,15 @@ export async function POST(request: Request) {
           });
 
           ms.on("text", (delta) => emit({ type: "text", delta }));
+
+          // Avisa assim que o modelo COMEÇA a gerar uma ferramenta (ex: o HTML
+          // grande de um dashboard) — antes só sabíamos quando terminava, o que
+          // deixava o usuário sem feedback durante a geração.
+          ms.on("streamEvent", (sev) => {
+            if (sev.type === "content_block_start" && sev.content_block.type === "tool_use") {
+              emit({ type: "tool_pending", id: sev.content_block.id, name: sev.content_block.name });
+            }
+          });
 
           const final = await ms.finalMessage();
           convo.push({ role: "assistant", content: final.content });

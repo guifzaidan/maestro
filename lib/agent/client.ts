@@ -13,6 +13,7 @@ export interface AgentMessage {
 
 export interface AgentHandlers {
   onText?: (delta: string) => void;
+  onToolPending?: (e: { id: string; name: string }) => void;
   onToolStart?: (e: { id: string; name: string; input: unknown; groupTotal?: number; groupIndex?: number }) => void;
   onToolResult?: (e: { id: string; name: string; result: unknown; groupTotal?: number; groupDone?: number }) => void;
   onDone?: () => void;
@@ -72,6 +73,7 @@ export async function streamAgent(
         }
         switch (evt.type) {
           case "text": handlers.onText?.(evt.delta as string); break;
+          case "tool_pending": handlers.onToolPending?.(evt as never); break;
           case "tool_start": handlers.onToolStart?.(evt as never); break;
           case "tool_result": handlers.onToolResult?.(evt as never); break;
           case "done": handlers.onDone?.(); break;

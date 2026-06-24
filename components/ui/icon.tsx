@@ -60,6 +60,7 @@ import {
   AlertCircle,
   House,
   Download,
+  Eye,
   Loader2,
   Inbox,
   type LucideIcon,
@@ -168,6 +169,7 @@ const REGISTRY: Record<string, LucideIcon> = {
   AlertCircle,
   House,
   Download,
+  Eye,
   Loader: Loader2,
   Inbox,
 };

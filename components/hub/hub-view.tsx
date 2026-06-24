@@ -194,15 +194,24 @@ function downloadArtifact(a: ArtifactData) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** Decodifica o base64 do artefato em texto UTF-8 (para preview de HTML). */
+function artifactToText(a: ArtifactData): string {
+  const bin = atob(a.base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 /**
  * Uma linha do chat (balão / log / artefato / escolha). MEMOIZADO: durante o
  * streaming só re-renderiza o balão cujo conteúdo mudou — os outros (incl. os
  * grandes, com blur) ficam parados, mantendo o glass fluido.
  */
-const MessageRow = memo(function MessageRow({ msg, chatBusy, onPick }: {
+const MessageRow = memo(function MessageRow({ msg, chatBusy, onPick, onPreview }: {
   msg: ChatMessage;
   chatBusy: boolean;
   onPick: (id: string, opt: string) => void;
+  onPreview: (a: ArtifactData) => void;
 }) {
   if (msg.role === "log") return (
     <motion.div initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }}
@@ -243,23 +252,39 @@ const MessageRow = memo(function MessageRow({ msg, chatBusy, onPick }: {
     );
   }
 
-  if (msg.role === "artifact" && msg.artifact) return (
-    <motion.button onClick={() => downloadArtifact(msg.artifact!)}
-      initial={{ opacity: 0, y: 8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
-      whileHover={{ scale: 1.015, borderColor: "rgba(255,255,255,0.28)" }} whileTap={{ scale: 0.985 }}
-      transition={{ type: "spring", stiffness: 300, damping: 26 }}
-      className="group flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3.5 py-3 text-left"
-      style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.14)" }}>
-      <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(255,255,255,0.10)" }}>
-        <Icon name="FileText" size={16} strokeWidth={1.75} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-white/90">{msg.artifact.filename}</p>
-        <p className="text-[11px] text-white/40">{(msg.artifact.format ?? "arquivo").toUpperCase()} · {(msg.artifact.bytes / 1024).toFixed(1)} KB · baixar</p>
-      </div>
-      <Icon name="Download" size={16} className="flex-shrink-0 text-white/40 transition-colors group-hover:text-white/80" />
-    </motion.button>
-  );
+  if (msg.role === "artifact" && msg.artifact) {
+    const a = msg.artifact;
+    const canPreview = a.format === "html";
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+        transition={{ type: "spring", stiffness: 300, damping: 26 }}
+        className="flex w-full items-center gap-3 rounded-2xl px-3.5 py-3"
+        style={{ background: "rgba(255,255,255,0.06)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.14)" }}>
+        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg" style={{ background: "rgba(255,255,255,0.10)" }}>
+          <Icon name={canPreview ? "LayoutDashboard" : "FileText"} size={16} strokeWidth={1.75} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-medium text-white/90">{a.filename}</p>
+          <p className="text-[11px] text-white/40">{(a.format ?? "arquivo").toUpperCase()} · {(a.bytes / 1024).toFixed(1)} KB{canPreview ? " · preview + baixar" : " · baixar"}</p>
+        </div>
+        {canPreview && (
+          <motion.button onClick={() => onPreview(a)} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+            title="Ver preview" aria-label="Ver preview"
+            className="flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-white/50 transition-colors hover:text-white"
+            style={{ background: "rgba(255,255,255,0.08)" }}>
+            <Icon name="Eye" size={15} strokeWidth={2} />
+          </motion.button>
+        )}
+        <motion.button onClick={() => downloadArtifact(a)} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+          title="Baixar" aria-label="Baixar"
+          className="flex h-8 w-8 flex-shrink-0 cursor-pointer items-center justify-center rounded-lg text-white/50 transition-colors hover:text-white"
+          style={{ background: "rgba(255,255,255,0.08)" }}>
+          <Icon name="Download" size={15} strokeWidth={2} />
+        </motion.button>
+      </motion.div>
+    );
+  }
 
   if (msg.role === "choice") return (
     <motion.div initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -334,10 +359,12 @@ export function HubView() {
   const [chatInput, setChatInput] = useState("");
   const [chatStep, setChatStep] = useState(0);
   const [isTyping, setIsTyping] = useState(false);
+  const [activity, setActivity] = useState<string | null>(null); // rótulo do que o maestro está fazendo
   const [chatBusy, setChatBusy] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<AgentAttachment[]>([]);
   const [uploadingFile, setUploadingFile] = useState(false);
   const [usage, setUsage] = useState<{ tokensUsed: number; costUsd: number } | null>(null);
+  const [previewArtifact, setPreviewArtifact] = useState<ArtifactData | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [mindNodes, setMindNodes] = useState<MindNode[]>([]);
   const [execEvents, setExecEvents] = useState<ExecEvent[]>([]);
@@ -643,6 +670,7 @@ export function HubView() {
   const runChatTurn = () => {
     setChatBusy(true);
     setIsTyping(true);
+    setActivity(null);
     turnDoneRef.current = false;
     // Novo turno do usuário corta qualquer fala em andamento.
     if (voiceModeRef.current) { try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } setSpeaking(false); }
@@ -677,8 +705,15 @@ export function HubView() {
     streamAgent(
       { branch: chatBranchRef.current, messages: agentConvoRef.current },
       {
+        onToolPending: (e) => {
+          // O modelo começou a gerar uma ferramenta (ex: o HTML do dashboard).
+          // Mostra o indicador "trabalhando" com rótulo durante a geração.
+          setIsTyping(true);
+          setActivity(describeTool(e.name, {}));
+        },
         onText: (delta) => {
           setIsTyping(false);
+          setActivity(null);
           fullText += delta;
           roundText += delta;
           if (roundId === null) {
@@ -692,10 +727,11 @@ export function HubView() {
           }
         },
         onToolStart: (e) => {
-          setIsTyping(false);
+          setActivity(null);
           closeRound(); // o próximo texto começa um balão novo
-          if (e.name === "selecionar_branch") return; // silencioso — vira a tag de branch no result
+          if (e.name === "selecionar_branch") { setIsTyping(true); return; } // silencioso — vira a tag de branch no result
           if (e.name === "perguntar_opcoes") {
+            setIsTyping(false);
             const inp = e.input as { pergunta?: string; opcoes?: string[] } | undefined;
             setMessages(prev => [...prev, {
               id: `q${e.id}`, role: "choice",
@@ -705,6 +741,7 @@ export function HubView() {
             if (inp?.pergunta) speak(inp.pergunta); // lê a pergunta em voz alta
             return;
           }
+          setIsTyping(true); // ferramenta executando — segue mostrando "trabalhando"
           // Grupo de ferramentas repetidas: 1 linha de progresso x/total.
           const total = e.groupTotal ?? 1;
           if (total > 1) {
@@ -740,6 +777,7 @@ export function HubView() {
           closeRound(); // fecha e fala o último balão
           abortRef.current = null;
           setIsTyping(false);
+          setActivity(null);
           setChatBusy(false);
           turnDoneRef.current = true;
           if (fullText.trim()) {
@@ -751,6 +789,7 @@ export function HubView() {
         onError: (msg) => {
           abortRef.current = null;
           setIsTyping(false);
+          setActivity(null);
           setChatBusy(false);
           turnDoneRef.current = true;
           setMessages(prev => [...prev, { id: `err${Date.now()}`, role: "log", content: `⚠ ${friendlyAgentError(msg)}` }]);
@@ -832,6 +871,8 @@ export function HubView() {
     setMessages(prev => prev.map(m => m.id === msgId ? { ...m, options: [] } : m));
     sendTextRef.current(opt);
   }, []);
+
+  const openPreview = useCallback((a: ArtifactData) => setPreviewArtifact(a), []);
 
   // Drives one agent turn: streams text + tool events, accumulates the
   // assistant reply into the conversation history when the turn ends.
@@ -1233,14 +1274,14 @@ export function HubView() {
               <div className="mb-4 flex max-h-[min(60vh,640px)] flex-col gap-3 overflow-y-auto px-1 py-1" style={{ scrollbarWidth: "none" }}>
                 <AnimatePresence initial={false}>
                   {messages.map((msg) => (
-                    <MessageRow key={msg.id} msg={msg} chatBusy={chatBusy} onPick={pickChoice} />
+                    <MessageRow key={msg.id} msg={msg} chatBusy={chatBusy} onPick={pickChoice} onPreview={openPreview} />
                   ))}
                 </AnimatePresence>
 
                 <AnimatePresence>
                   {isTyping && (
                     <motion.div key="typing" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} className="flex justify-start">
-                      <div className="rounded-2xl rounded-bl-sm px-4 py-3" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
+                      <div className="flex items-center gap-2.5 rounded-2xl rounded-bl-sm px-4 py-3" style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)" }}>
                         <div className="flex items-center gap-1">
                           {[0, 1, 2].map((i) => (
                             <motion.span key={i} className="h-1.5 w-1.5 rounded-full bg-white/40"
@@ -1248,6 +1289,7 @@ export function HubView() {
                               transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }} />
                           ))}
                         </div>
+                        <span className="text-[12px] text-white/45">{activity ?? "Maestro trabalhando…"}</span>
                       </div>
                     </motion.div>
                   )}
@@ -1543,8 +1585,61 @@ export function HubView() {
           )}
         </AnimatePresence>
 
+        {/* Live preview de artefato HTML (dashboard) — efêmero, em modal */}
+        <AnimatePresence>
+          {previewArtifact && (
+            <ArtifactPreview artifact={previewArtifact} onClose={() => setPreviewArtifact(null)} />
+          )}
+        </AnimatePresence>
+
       </div>
     </PageTransition>
+  );
+}
+
+/* ── Preview de artefato HTML em modal (live, efêmero) ─────────── */
+function ArtifactPreview({ artifact, onClose }: { artifact: ArtifactData; onClose: () => void }) {
+  const html = artifactToText(artifact);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <motion.div
+      className="fixed inset-0 z-[160] flex items-center justify-center p-4 sm:p-8"
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      transition={{ duration: 0.2 }}
+      onClick={onClose}
+      style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(4px)", WebkitBackdropFilter: "blur(4px)" }}>
+      <motion.div
+        initial={{ opacity: 0, y: 16, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 12, scale: 0.98 }}
+        transition={{ type: "spring", stiffness: 320, damping: 30 }}
+        onClick={(e) => e.stopPropagation()}
+        className="flex w-full max-w-[1000px] flex-col overflow-hidden rounded-2xl"
+        style={{ height: "min(88vh, 900px)", background: "#0f0f12", border: "1px solid rgba(255,255,255,0.14)", boxShadow: "0 30px 80px -24px rgba(0,0,0,0.85)" }}>
+        <div className="flex flex-shrink-0 items-center gap-3 border-b border-white/10 px-4 py-3">
+          <Icon name="LayoutDashboard" size={15} className="text-white/60" />
+          <span className="min-w-0 flex-1 truncate text-sm font-medium text-white/85">{artifact.filename}</span>
+          <span className="hidden text-[11px] text-white/30 sm:inline">preview ao vivo · não fica salvo</span>
+          <motion.button onClick={() => downloadArtifact(artifact)} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+            title="Baixar" className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/55 transition-colors hover:text-white"
+            style={{ background: "rgba(255,255,255,0.08)" }}>
+            <Icon name="Download" size={15} strokeWidth={2} />
+          </motion.button>
+          <motion.button onClick={onClose} whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }}
+            title="Fechar" className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-lg text-white/55 transition-colors hover:text-white"
+            style={{ background: "rgba(255,255,255,0.08)" }}>
+            <Icon name="X" size={15} strokeWidth={2.2} />
+          </motion.button>
+        </div>
+        {/* sandbox sem allow-same-origin: HTML isolado, sem acesso ao app */}
+        <iframe title={artifact.filename} srcDoc={html} sandbox="allow-scripts"
+          className="min-h-0 flex-1 border-0 bg-white" />
+      </motion.div>
+    </motion.div>
   );
 }
 
