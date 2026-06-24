@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, type ReactNode } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { Icon } from "@/components/ui/icon";
@@ -24,6 +24,18 @@ interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifa
 interface MindNode   { id: string; label: string; value: string; type: "branch" | "tools" | "deadline" | "text"; }
 interface ArtifactData { filename: string; mime: string; base64: string; bytes: number; format?: string; }
 interface ExecEvent  { id: string; type: "log" | "assistant" | "user" | "done" | "artifact"; content: string; artifact?: ArtifactData; }
+
+/** Render leve de markdown inline: **negrito** e `código`. Quebras de linha via CSS. */
+function renderInline(text: string): ReactNode {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  return parts.map((p, i) => {
+    if (/^\*\*[^*]+\*\*$/.test(p)) return <strong key={i} className="font-semibold text-white">{p.slice(2, -2)}</strong>;
+    if (/^`[^`]+`$/.test(p)) return (
+      <code key={i} className="rounded bg-white/10 px-1 py-0.5 font-mono text-[0.85em]">{p.slice(1, -1)}</code>
+    );
+    return <span key={i}>{p}</span>;
+  });
+}
 
 /** Converte base64 → Blob e dispara o download no navegador. */
 function downloadArtifact(a: ArtifactData) {
@@ -229,16 +241,14 @@ export function HubView() {
   const runChatTurn = () => {
     setChatBusy(true);
     setIsTyping(true);
-    agentBufferRef.current = "";
-    const assistantId = `a${Date.now()}`;
-    let opened = false;
-    const ensureAssistant = () => {
-      if (!opened) {
-        opened = true;
-        setIsTyping(false);
-        setMessages(prev => [...prev, { id: assistantId, role: "assistant", content: "" }]);
-      }
-    };
+
+    // `fullText` guarda tudo (p/ o histórico); cada rodada (entre ferramentas)
+    // vira um balão separado, pra não colar "texto1Texto2".
+    let fullText = "";
+    let roundText = "";
+    let roundId: string | null = null;
+    let seq = 0;
+    const closeRound = () => { roundId = null; roundText = ""; };
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -249,12 +259,21 @@ export function HubView() {
       { branch: chatBranchRef.current, messages: agentConvoRef.current },
       {
         onText: (delta) => {
-          agentBufferRef.current += delta;
-          ensureAssistant();
-          setMessages(prev => prev.map(m => m.id === assistantId ? { ...m, content: agentBufferRef.current } : m));
+          setIsTyping(false);
+          fullText += delta;
+          roundText += delta;
+          if (roundId === null) {
+            const id = `a${Date.now()}-${seq++}`;
+            roundId = id;
+            setMessages(prev => [...prev, { id, role: "assistant", content: roundText }]);
+          } else {
+            const id = roundId;
+            setMessages(prev => prev.map(m => m.id === id ? { ...m, content: roundText } : m));
+          }
         },
         onToolStart: (e) => {
           setIsTyping(false);
+          closeRound(); // o próximo texto começa um balão novo
           if (e.name === "selecionar_branch") return; // silencioso — vira a tag de branch no result
           setMessages(prev => [...prev, { id: `t${e.id}`, role: "log", content: `${toolLabel(e.name)}…` }]);
         },
@@ -273,8 +292,8 @@ export function HubView() {
           abortRef.current = null;
           setIsTyping(false);
           setChatBusy(false);
-          if (agentBufferRef.current.trim()) {
-            agentConvoRef.current = [...agentConvoRef.current, { role: "assistant", content: agentBufferRef.current }];
+          if (fullText.trim()) {
+            agentConvoRef.current = [...agentConvoRef.current, { role: "assistant", content: fullText }];
           }
         },
         onError: (msg) => {
@@ -735,7 +754,7 @@ export function HubView() {
                         <div className={cn("max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed", msg.role === "user" ? "rounded-br-sm" : "rounded-bl-sm")}
                           style={msg.role === "user" ? { background: "rgba(255,255,255,0.10)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff" }
                             : { background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.75)" }}>
-                          {msg.content || "…"}
+                          {msg.role === "assistant" ? (msg.content ? renderInline(msg.content) : "…") : msg.content}
                         </div>
                       </motion.div>
                     );
