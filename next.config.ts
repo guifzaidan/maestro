@@ -6,6 +6,8 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
+  // exceljs/docx são server-only (geração de artefatos) — não bundlar.
+  serverExternalPackages: ["exceljs", "docx"],
 };
 
 export default nextConfig;

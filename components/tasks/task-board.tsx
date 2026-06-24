@@ -72,7 +72,7 @@ const VALID_LISTS: TaskList[] = ["seg", "ter", "qua", "qui", "sex", "sab", "dom"
 interface DbTaskRow {
   id: string;
   title: string;
-  workspace: string;
+  branch: string;
   list: string | null;
   done: boolean;
   due: string | null;
@@ -85,7 +85,7 @@ function toBoardTask(row: DbTaskRow): Task {
   return {
     id: row.id,
     title: row.title,
-    workspace: row.workspace,
+    branch: row.branch,
     list,
     done: row.done,
     due: row.due ?? undefined,
@@ -166,13 +166,13 @@ export function TaskBoard() {
     toast("Tarefa atualizada", "edit");
   };
 
-  const saveTaskEdit = (id: string, fields: { title: string; due?: string; description?: string; workspace?: string }) => {
+  const saveTaskEdit = (id: string, fields: { title: string; due?: string; description?: string; branch?: string }) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...fields } : t)));
     setEditTarget(null);
     fetch("/api/tasks", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, title: fields.title, due: fields.due ?? null, instruction: fields.description ?? null, workspace: fields.workspace ?? null }),
+      body: JSON.stringify({ id, title: fields.title, due: fields.due ?? null, instruction: fields.description ?? null, branch: fields.branch ?? null }),
     }).catch(() => {});
     toast("Tarefa atualizada", "edit");
   };
@@ -184,7 +184,7 @@ export function TaskBoard() {
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: trimmed, workspace: active, list, due }),
+        body: JSON.stringify({ title: trimmed, branch: active, list, due }),
       });
       const data = await res.json();
       if (data.task) {
@@ -196,7 +196,7 @@ export function TaskBoard() {
     }
   };
 
-  const visible = allBranches ? tasks : tasks.filter((t) => t.workspace === active);
+  const visible = allBranches ? tasks : tasks.filter((t) => t.branch === active);
 
   return (
     <PageTransition>
@@ -784,7 +784,7 @@ const FIELD_STYLE = {
 
 function EditTaskModal({ task, onSave, onCancel, onDelete }: {
   task: Task;
-  onSave: (fields: { title: string; due?: string; description?: string; workspace?: string }) => void;
+  onSave: (fields: { title: string; due?: string; description?: string; branch?: string }) => void;
   onCancel: () => void;
   onDelete: () => void;
 }) {
@@ -792,7 +792,7 @@ function EditTaskModal({ task, onSave, onCancel, onDelete }: {
   const [due, setDue] = useState(task.due ?? "");
   const [description, setDescription] = useState(task.description ?? "");
   const { branches } = useWorkspace();
-  const [workspace, setWorkspace] = useState<string>(task.workspace);
+  const [branch, setBranch] = useState<string>(task.branch);
   const [calOpen, setCalOpen] = useState(false);
   const [branchOpen, setBranchOpen] = useState(false);
   const calRef = useRef<HTMLDivElement>(null);
@@ -819,7 +819,7 @@ function EditTaskModal({ task, onSave, onCancel, onDelete }: {
   const handleSave = () => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    onSave({ title: trimmed, due: due || undefined, description: description || undefined, workspace });
+    onSave({ title: trimmed, due: due || undefined, description: description || undefined, branch });
   };
 
   return (
@@ -874,7 +874,7 @@ function EditTaskModal({ task, onSave, onCancel, onDelete }: {
           {/* Branch */}
           <div className="relative" ref={branchRef}>
             <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-widest text-white/40">Branch</label>
-            {(() => { const ws = getWorkspace(workspace); return (
+            {(() => { const ws = getWorkspace(branch); return (
               <button
                 type="button"
                 onClick={() => setBranchOpen((o) => !o)}
@@ -901,13 +901,13 @@ function EditTaskModal({ task, onSave, onCancel, onDelete }: {
                   style={{ background: "rgba(20,20,22,0.98)", border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 24px 60px -12px rgba(0,0,0,0.85)" }}
                 >
                   {branches.map((w) => {
-                    const isActive = workspace === w.id;
+                    const isActive = branch === w.id;
                     return (
                       <motion.button
                         key={w.id}
                         type="button"
                         whileHover={{ x: 3 }}
-                        onClick={() => { setWorkspace(w.id); setBranchOpen(false); }}
+                        onClick={() => { setBranch(w.id); setBranchOpen(false); }}
                         className={cn(
                           "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-[13px] transition-colors",
                           isActive ? "text-white" : "text-white/50 hover:text-white/80"
@@ -1055,7 +1055,7 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
   onOpenEdit?: (task: Task) => void;
   showBranch?: boolean;
 }) {
-  const ws = getWorkspace(task.workspace);
+  const ws = getWorkspace(task.branch);
 
   return (
     <motion.div

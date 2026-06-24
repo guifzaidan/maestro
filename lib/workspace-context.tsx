@@ -2,19 +2,22 @@
 
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from "react";
-import { WORKSPACES, getWorkspace, setBranchCache, type Workspace } from "./theme";
+import { WORKSPACES, BRANCH_IDS, getWorkspace, setBranchCache, type Workspace } from "./theme";
 
 interface WorkspaceContextValue {
   active: string;
   setActive: (id: string) => void;
   /** Branches carregadas do DB (fallback estático enquanto carrega). */
   branches: Workspace[];
+  /** Recarrega as branches do DB (ex: após salvar token/identidade). */
+  reloadBranches: () => Promise<void>;
   /** Workspace ativa resolvida — conveniente para evitar chamadas a getWorkspace(active). */
   activeWorkspace: Workspace;
   /** "all" = visão unificada de todos os contextos */
@@ -29,24 +32,29 @@ interface WorkspaceContextValue {
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
 
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
-  const [active, setActive] = useState<string>("dux");
+  const [active, setActive] = useState<string>(BRANCH_IDS.dux);
   const [scope, setScope] = useState<string | "all">("all");
   const [hideContextSwitcher, setHideContextSwitcher] = useState(false);
   const [allBranches, setAllBranches] = useState(false);
   const [branches, setBranches] = useState<Workspace[]>(WORKSPACES);
 
   // Carrega branches do DB e atualiza o cache global para getWorkspace().
-  useEffect(() => {
-    fetch("/api/branches")
-      .then((r) => r.json())
-      .then((data: { branches?: Workspace[] }) => {
-        if (Array.isArray(data.branches) && data.branches.length > 0) {
-          setBranches(data.branches);
-          setBranchCache(data.branches);
-        }
-      })
-      .catch(() => {/* silencia erros de rede; usa fallback estático */});
+  const reloadBranches = useCallback(async () => {
+    try {
+      const r = await fetch("/api/branches");
+      const data: { branches?: Workspace[] } = await r.json();
+      if (Array.isArray(data.branches) && data.branches.length > 0) {
+        setBranches(data.branches);
+        setBranchCache(data.branches);
+      }
+    } catch {
+      /* silencia erros de rede; usa fallback estático */
+    }
   }, []);
+
+  useEffect(() => {
+    void reloadBranches();
+  }, [reloadBranches]);
 
   const activeWorkspace = useMemo(
     () => branches.find((w) => w.id === active) ?? branches[0] ?? WORKSPACES[0],
@@ -66,6 +74,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       active,
       setActive,
       branches,
+      reloadBranches,
       activeWorkspace,
       scope,
       setScope,
@@ -74,7 +83,7 @@ export function WorkspaceProvider({ children }: { children: ReactNode }) {
       allBranches,
       setAllBranches,
     }),
-    [active, branches, activeWorkspace, scope, hideContextSwitcher, allBranches],
+    [active, branches, reloadBranches, activeWorkspace, scope, hideContextSwitcher, allBranches],
   );
 
   return (

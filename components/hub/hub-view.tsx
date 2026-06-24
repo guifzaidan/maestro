@@ -22,7 +22,23 @@ const BEAMS = [
 
 interface ChatMessage { id: string; role: "user" | "assistant"; content: string; }
 interface MindNode   { id: string; label: string; value: string; type: "branch" | "tools" | "deadline" | "text"; }
-interface ExecEvent  { id: string; type: "log" | "assistant" | "user" | "done"; content: string; }
+interface ArtifactData { filename: string; mime: string; base64: string; bytes: number; format?: string; }
+interface ExecEvent  { id: string; type: "log" | "assistant" | "user" | "done" | "artifact"; content: string; artifact?: ArtifactData; }
+
+/** Converte base64 → Blob e dispara o download no navegador. */
+function downloadArtifact(a: ArtifactData) {
+  const bin = atob(a.base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const url = URL.createObjectURL(new Blob([bytes], { type: a.mime }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = a.filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 const MOCK_INITIAL = "Recebi o áudio! Vou confirmar alguns detalhes antes de iniciar.";
 const MOCK_INITIAL_TEXT = "Olá! Vou te ajudar a estruturar essa tarefa. Preciso de alguns detalhes.";
@@ -285,7 +301,7 @@ export function HubView() {
     abortRef.current = ctrl;
 
     streamAgent(
-      { workspace: active, messages: agentConvoRef.current },
+      { branch: active, messages: agentConvoRef.current },
       {
         onText: (delta) => {
           agentBufferRef.current += delta;
@@ -296,9 +312,22 @@ export function HubView() {
           setExecEvents(prev => [...prev, { id: `t${e.id}`, type: "log", content: `${toolLabel(e.name)}�?�` }]);
         },
         onToolResult: (e) => {
-          const r = e.result as { ok?: boolean; simulated?: boolean; task?: { title?: string } } | undefined;
-          let note = `${toolLabel(e.name)} �o"`;
+          const r = e.result as {
+            ok?: boolean; simulated?: boolean; task?: { title?: string };
+            artifact?: ArtifactData; rowCount?: number; count?: number;
+          } | undefined;
+
+          // Artefato gerado → card com botão de download.
+          if (e.name === "gerar_artefato" && r?.artifact) {
+            setExecEvents(prev => [...prev, { id: `art${e.id}`, type: "artifact", content: r.artifact!.filename, artifact: r.artifact }]);
+            return;
+          }
+
+          let note = `${toolLabel(e.name)} ✓`;
           if (e.name === "criar_tarefa" && r?.task?.title) note = `Tarefa criada: ${r.task.title}`;
+          if (e.name === "consultar_base_de_dados" && typeof r?.rowCount === "number") note = `${r.rowCount} linha(s) lidas`;
+          if (e.name === "consultar_tarefas" && typeof r?.count === "number") note = `${r.count} tarefa(s)`;
+          if (r?.ok === false) note = `${toolLabel(e.name)} — falhou`;
           if (r?.simulated) note += " (simulado)";
           setExecEvents(prev => [...prev, { id: `r${e.id}`, type: "log", content: note }]);
         },
@@ -779,6 +808,26 @@ export function HubView() {
                         </span>
                         <span className="text-sm font-semibold text-white/90">{evt.content}</span>
                       </motion.div>
+                    );
+                    if (evt.type === "artifact" && evt.artifact) return (
+                      <motion.button key={evt.id} onClick={() => downloadArtifact(evt.artifact!)}
+                        initial={{ opacity: 0, y: 8, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }}
+                        whileHover={{ scale: 1.015, borderColor: "rgba(255,255,255,0.28)" }} whileTap={{ scale: 0.985 }}
+                        transition={{ type: "spring", stiffness: 300, damping: 26 }}
+                        className="group flex w-full cursor-pointer items-center gap-3 rounded-xl px-3.5 py-3 text-left"
+                        style={{ background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.14)" }}>
+                        <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg"
+                          style={{ background: "rgba(255,255,255,0.10)" }}>
+                          <Icon name="FileText" size={16} strokeWidth={1.75} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-medium text-white/90">{evt.artifact.filename}</p>
+                          <p className="text-[11px] text-white/40">
+                            {(evt.artifact.format ?? "arquivo").toUpperCase()} · {(evt.artifact.bytes / 1024).toFixed(1)} KB · clique para baixar
+                          </p>
+                        </div>
+                        <Icon name="Download" size={16} className="flex-shrink-0 text-white/40 transition-colors group-hover:text-white/80" />
+                      </motion.button>
                     );
                     // log
                     return (

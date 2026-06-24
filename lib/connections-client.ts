@@ -4,7 +4,7 @@
 export interface ConnectionDTO {
   id: string;
   connector: string;
-  workspace: string | null;
+  branch: string | null;
   name: string | null;
   config: Record<string, unknown> | null;
   connected: boolean;
@@ -16,7 +16,7 @@ export interface ConnectionDTO {
 export interface SaveConnectionInput {
   id?: string;
   connector: string;
-  workspace?: string | null;
+  branch?: string | null;
   name?: string | null;
   config?: Record<string, unknown> | null;
   /** segredo em claro; omita ou vazio para manter o atual */
@@ -24,8 +24,8 @@ export interface SaveConnectionInput {
   connected?: boolean;
 }
 
-export async function fetchConnections(workspace?: string): Promise<ConnectionDTO[]> {
-  const url = workspace ? `/api/connections?workspace=${encodeURIComponent(workspace)}` : "/api/connections";
+export async function fetchConnections(branch?: string): Promise<ConnectionDTO[]> {
+  const url = branch ? `/api/connections?branch=${encodeURIComponent(branch)}` : "/api/connections";
   const res = await fetch(url);
   const data = await res.json();
   return data.connections ?? [];
@@ -77,12 +77,12 @@ export interface ImportResult {
 /** Importa/sincroniza as tabelas selecionadas de uma conexão como tasks. */
 export async function importConnection(
   id: string,
-  workspace: string,
+  branch: string,
 ): Promise<{ result?: ImportResult; error?: string }> {
   const res = await fetch("/api/connections/import", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ id, workspace }),
+    body: JSON.stringify({ id, branch }),
   });
   return res.json();
 }

@@ -1,6 +1,7 @@
 import { drizzle } from "drizzle-orm/libsql";
 import { createClient } from "@libsql/client";
 import * as schema from "./schema";
+import { WORKSPACES } from "../theme";
 
 /**
  * Cliente libSQL. Local agora (arquivo SQLite), Turso depois — basta apontar
@@ -23,21 +24,22 @@ export function ensureSchema() {
         [
           // Branches — fonte de verdade para contextos/workspaces.
           `CREATE TABLE IF NOT EXISTS branches (
-            id          TEXT PRIMARY KEY,
-            name        TEXT NOT NULL,
-            short       TEXT NOT NULL,
-            icon        TEXT NOT NULL,
-            accent      TEXT NOT NULL,
-            accent2     TEXT NOT NULL,
-            accent_soft TEXT NOT NULL,
-            tagline     TEXT,
-            sort        INTEGER NOT NULL DEFAULT 0,
-            created_at  INTEGER NOT NULL
+            id           TEXT PRIMARY KEY,
+            name         TEXT NOT NULL,
+            short        TEXT NOT NULL,
+            icon         TEXT NOT NULL,
+            accent       TEXT NOT NULL,
+            accent2      TEXT NOT NULL,
+            accent_soft  TEXT NOT NULL,
+            tagline      TEXT,
+            sort         INTEGER NOT NULL DEFAULT 0,
+            claude_token TEXT,
+            created_at   INTEGER NOT NULL
           )`,
           `CREATE TABLE IF NOT EXISTS tasks (
             id TEXT PRIMARY KEY,
             title TEXT NOT NULL,
-            workspace TEXT NOT NULL REFERENCES branches(id),
+            branch_id TEXT NOT NULL REFERENCES branches(id),
             list TEXT,
             done INTEGER NOT NULL DEFAULT 0,
             due TEXT,
@@ -47,7 +49,7 @@ export function ensureSchema() {
           )`,
           `CREATE TABLE IF NOT EXISTS agent_runs (
             id TEXT PRIMARY KEY,
-            workspace TEXT NOT NULL REFERENCES branches(id),
+            branch_id TEXT NOT NULL REFERENCES branches(id),
             status TEXT NOT NULL,
             created_at INTEGER NOT NULL
           )`,
@@ -61,7 +63,7 @@ export function ensureSchema() {
           `CREATE TABLE IF NOT EXISTS connections (
             id TEXT PRIMARY KEY,
             connector TEXT NOT NULL,
-            workspace TEXT REFERENCES branches(id),
+            branch_id TEXT REFERENCES branches(id),
             name TEXT,
             config TEXT,
             secret TEXT,
@@ -73,16 +75,14 @@ export function ensureSchema() {
         "write",
       );
 
-      // Seed dos 3 branches iniciais — INSERT OR IGNORE para ser idempotente.
+      // Seed dos branches iniciais (UUID fixo via WORKSPACES) — INSERT OR IGNORE
+      // para ser idempotente. Fonte única de verdade: lib/theme.ts.
       await client.batch(
-        [
-          `INSERT OR IGNORE INTO branches (id, name, short, icon, accent, accent2, accent_soft, tagline, sort, created_at)
-           VALUES ('dux', 'DUX', 'DX', 'Circle', '#f59e0b', '#f97316', 'rgba(245, 158, 11, 0.18)', 'Token Claude · DUX', 0, 1700000000000)`,
-          `INSERT OR IGNORE INTO branches (id, name, short, icon, accent, accent2, accent_soft, tagline, sort, created_at)
-           VALUES ('sheep', 'Sheep Tech', 'ST', 'X', '#10b981', '#22d3ee', 'rgba(16, 185, 129, 0.18)', 'Token Claude · Sheep', 1, 1700000000001)`,
-          `INSERT OR IGNORE INTO branches (id, name, short, icon, accent, accent2, accent_soft, tagline, sort, created_at)
-           VALUES ('pessoal', 'Pessoal', 'P', 'Triangle', '#3b82f6', '#06b6d4', 'rgba(59, 130, 246, 0.18)', 'Token do orquestrador', 2, 1700000000002)`,
-        ],
+        WORKSPACES.map((w, i) => ({
+          sql: `INSERT OR IGNORE INTO branches (id, name, short, icon, accent, accent2, accent_soft, tagline, sort, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          args: [w.id, w.name, w.short, w.icon, w.accent, w.accent2, w.accentSoft, w.tagline, i, 1700000000000 + i],
+        })),
         "write",
       );
 
@@ -92,6 +92,11 @@ export function ensureSchema() {
         "ALTER TABLE tasks ADD COLUMN source_connection TEXT",
         "ALTER TABLE tasks ADD COLUMN source_table TEXT",
         "ALTER TABLE tasks ADD COLUMN source_pk TEXT",
+        "ALTER TABLE branches ADD COLUMN claude_token TEXT",
+        // Renomeia workspace → branch_id (padroniza a referência à branch).
+        "ALTER TABLE tasks RENAME COLUMN workspace TO branch_id",
+        "ALTER TABLE connections RENAME COLUMN workspace TO branch_id",
+        "ALTER TABLE agent_runs RENAME COLUMN workspace TO branch_id",
       ];
       for (const stmt of migrations) {
         try {

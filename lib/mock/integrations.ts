@@ -1,4 +1,6 @@
-import type { WorkspaceId } from "../theme";
+import { BRANCH_IDS, type WorkspaceId } from "../theme";
+
+const ALL_BRANCHES: WorkspaceId[] = [BRANCH_IDS.dux, BRANCH_IDS.sheep, BRANCH_IDS.pessoal];
 
 export interface Connector {
   id: string;
@@ -18,7 +20,7 @@ export const CONNECTORS: Connector[] = [
     description: "Token por contexto — DUX, Sheep e Pessoal usam keys distintas.",
     icon: "Sparkles",
     connected: false,
-    scopes: ["dux", "sheep", "pessoal"],
+    scopes: ALL_BRANCHES,
     category: "ia",
   },
   {
@@ -27,7 +29,7 @@ export const CONNECTORS: Connector[] = [
     description: "Acesso a pastas e arquivos da empresa.",
     icon: "HardDrive",
     connected: false,
-    scopes: ["dux", "sheep"],
+    scopes: [BRANCH_IDS.dux, BRANCH_IDS.sheep],
     category: "drive",
   },
   {
@@ -36,7 +38,7 @@ export const CONNECTORS: Connector[] = [
     description: "Leitura e escrita em planilhas operacionais.",
     icon: "Table",
     connected: false,
-    scopes: ["dux", "sheep"],
+    scopes: [BRANCH_IDS.dux, BRANCH_IDS.sheep],
     category: "docs",
   },
   {
@@ -45,7 +47,7 @@ export const CONNECTORS: Connector[] = [
     description: "Geração e edição de documentos.",
     icon: "FileText",
     connected: false,
-    scopes: ["dux"],
+    scopes: [BRANCH_IDS.dux],
     category: "docs",
   },
   {
@@ -54,7 +56,7 @@ export const CONNECTORS: Connector[] = [
     description: "Bancos de dados SQLite na edge — múltiplas conexões por contexto.",
     icon: "Database",
     connected: false,
-    scopes: ["dux", "sheep", "pessoal"],
+    scopes: ALL_BRANCHES,
     category: "db",
   },
   {
@@ -63,7 +65,7 @@ export const CONNECTORS: Connector[] = [
     description: "Base de conhecimento, wikis e docs via Notion API.",
     icon: "BookOpen",
     connected: false,
-    scopes: ["dux", "sheep", "pessoal"],
+    scopes: ALL_BRANCHES,
     category: "docs",
   },
   {
@@ -72,7 +74,7 @@ export const CONNECTORS: Connector[] = [
     description: "Sincronização de eventos e compromissos por contexto.",
     icon: "CalendarDays",
     connected: false,
-    scopes: ["dux", "sheep", "pessoal"],
+    scopes: ALL_BRANCHES,
     category: "calendar",
   },
   {
@@ -81,7 +83,7 @@ export const CONNECTORS: Connector[] = [
     description: "Envio e recebimento de mensagens via Twilio WhatsApp API.",
     icon: "MessageSquare",
     connected: false,
-    scopes: ["dux", "sheep", "pessoal"],
+    scopes: ALL_BRANCHES,
     category: "messaging",
   },
 ];

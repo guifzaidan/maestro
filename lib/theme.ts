@@ -9,6 +9,17 @@
 
 export type WorkspaceId = string;
 
+/**
+ * IDs (UUID) das branches padrão — fonte única de verdade usada pelo seed do
+ * banco, pelo fallback estático e pelo mapeamento de env do agente. Branches
+ * criadas pelo usuário recebem UUIDs próprios; estes são só os 3 iniciais.
+ */
+export const BRANCH_IDS = {
+  dux:     "ec11b4fb-3bc5-4609-9e39-6616cc882207",
+  sheep:   "c78d3d6f-a191-4f4e-8c2f-31f8b19aa1bf",
+  pessoal: "2c770a07-52ac-47ea-90a2-edaefb0e8c83",
+} as const;
+
 export interface Workspace {
   id: WorkspaceId;
   name: string;
@@ -20,11 +31,13 @@ export interface Workspace {
   accentSoft: string;
   /** Description shown in switcher / settings */
   tagline: string | null;
+  /** Se a branch já tem um token Claude salvo (DB). Indefinido no fallback estático. */
+  hasToken?: boolean;
 }
 
 export const WORKSPACES: Workspace[] = [
   {
-    id: "dux",
+    id: BRANCH_IDS.dux,
     name: "DUX",
     short: "DX",
     icon: "Circle",
@@ -34,7 +47,7 @@ export const WORKSPACES: Workspace[] = [
     tagline: "Token Claude · DUX",
   },
   {
-    id: "sheep",
+    id: BRANCH_IDS.sheep,
     name: "Sheep Tech",
     short: "ST",
     icon: "X",
@@ -44,7 +57,7 @@ export const WORKSPACES: Workspace[] = [
     tagline: "Token Claude · Sheep",
   },
   {
-    id: "pessoal",
+    id: BRANCH_IDS.pessoal,
     name: "Pessoal",
     short: "P",
     icon: "Triangle",

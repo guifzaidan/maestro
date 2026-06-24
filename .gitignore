@@ -25,6 +25,9 @@ local.db
 local.db-*
 *.sqlite
 
+# chave de criptografia de segredos (auto-gerada)
+.connections.key
+
 # misc
 .DS_Store
 *.pem

@@ -4,7 +4,7 @@ import { tasks, type Task, type NewTask } from "./schema";
 
 export interface CreateTaskInput {
   title: string;
-  workspace: string;
+  branch: string;
   list?: string | null;
   due?: string | null;
   tools?: string[] | null;
@@ -21,7 +21,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
   const row: NewTask = {
     id: crypto.randomUUID(),
     title: input.title,
-    workspace: input.workspace,
+    branch: input.branch,
     list: input.list ?? null,
     done: false,
     due: input.due ?? null,
@@ -40,7 +40,7 @@ export async function toggleTask(id: string, done: boolean): Promise<void> {
 
 export async function updateTask(
   id: string,
-  fields: { title?: string; due?: string | null; instruction?: string | null; workspace?: string },
+  fields: { title?: string; due?: string | null; instruction?: string | null; branch?: string },
 ): Promise<void> {
   await ensureSchema();
   await db.update(tasks).set(fields).where(eq(tasks.id, id));

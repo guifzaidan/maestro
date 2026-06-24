@@ -13,15 +13,18 @@ export async function POST(request: Request) {
   }
   try {
     const branch = await upsertBranch({
-      id:         body.id,
-      name:       body.name,
-      short:      body.short ?? body.id.slice(0, 2).toUpperCase(),
-      icon:       body.icon ?? "Circle",
-      accent:     body.accent ?? "#6366f1",
-      accent2:    body.accent2 ?? "#3b82f6",
-      accentSoft: body.accentSoft ?? "rgba(99, 102, 241, 0.18)",
-      tagline:    body.tagline ?? null,
-      sort:       body.sort ?? 99,
+      id:          body.id,
+      name:        body.name,
+      short:       body.short ?? body.id.slice(0, 2).toUpperCase(),
+      icon:        body.icon ?? "Circle",
+      accent:      body.accent ?? "#6366f1",
+      accent2:     body.accent2 ?? "#3b82f6",
+      accentSoft:  body.accentSoft ?? "rgba(99, 102, 241, 0.18)",
+      tagline:     body.tagline ?? null,
+      // undefined = preserva sort existente (novas branches usam 0 no upsert).
+      sort:        typeof body.sort === "number" ? body.sort : undefined,
+      // undefined = preserva token existente; string = troca; "" = remove.
+      claudeToken: typeof body.claudeToken === "string" ? body.claudeToken : undefined,
     });
     return NextResponse.json({ branch });
   } catch (e) {

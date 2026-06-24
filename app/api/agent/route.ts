@@ -1,14 +1,21 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { TOOLS, executeTool } from "@/lib/agent/tools";
+import { buildTools, executeTool } from "@/lib/agent/tools";
 import { buildSystemPrompt } from "@/lib/agent/prompt";
+import { getBranchToken } from "@/lib/db/branches";
+import { BRANCH_IDS } from "@/lib/theme";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-/** Seleciona a API key conforme o branch (com fallback para a key do orquestrador). */
-function keyFor(workspace: string): string | undefined {
-  if (workspace === "dux") return process.env.ANTHROPIC_API_KEY_DUX || process.env.ANTHROPIC_API_KEY;
-  if (workspace === "sheep") return process.env.ANTHROPIC_API_KEY_SHEEP || process.env.ANTHROPIC_API_KEY;
+/**
+ * Seleciona a API key da branch. Prioridade: token salvo no banco (Configurações
+ * → Branchs) → env por branch → env global do orquestrador.
+ */
+async function keyFor(branch: string): Promise<string | undefined> {
+  const dbToken = await getBranchToken(branch);
+  if (dbToken) return dbToken;
+  if (branch === BRANCH_IDS.dux) return process.env.ANTHROPIC_API_KEY_DUX || process.env.ANTHROPIC_API_KEY;
+  if (branch === BRANCH_IDS.sheep) return process.env.ANTHROPIC_API_KEY_SHEEP || process.env.ANTHROPIC_API_KEY;
   return process.env.ANTHROPIC_API_KEY;
 }
 
@@ -16,18 +23,18 @@ const MODEL = process.env.ANTHROPIC_MODEL || "claude-sonnet-4-6";
 const MAX_TOOL_ROUNDS = 8;
 
 export async function POST(request: Request) {
-  const { workspace = "pessoal", messages = [] } = await request.json();
+  const { branch = BRANCH_IDS.pessoal, messages = [] } = await request.json();
 
-  const apiKey = keyFor(workspace);
+  const apiKey = await keyFor(branch);
   if (!apiKey) {
     return new Response(
-      JSON.stringify({ error: "no_key", message: "ANTHROPIC_API_KEY não configurada no .env.local" }),
+      JSON.stringify({ error: "no_key", message: "Nenhum token Claude para esta branch — configure em Configurações → Branchs ou no .env.local." }),
       { status: 400, headers: { "content-type": "application/json" } },
     );
   }
 
   const client = new Anthropic({ apiKey });
-  const system = buildSystemPrompt(workspace);
+  const [system, tools] = await Promise.all([buildSystemPrompt(branch), buildTools()]);
   const encoder = new TextEncoder();
 
   const stream = new ReadableStream({
@@ -41,10 +48,10 @@ export async function POST(request: Request) {
         for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
           const ms = client.messages.stream({
             model: MODEL,
-            max_tokens: 2048,
+            max_tokens: 4096,
             system,
             messages: convo,
-            tools: TOOLS,
+            tools,
           });
 
           ms.on("text", (delta) => emit({ type: "text", delta }));
@@ -63,7 +70,7 @@ export async function POST(request: Request) {
             emit({ type: "tool_start", id: tu.id, name: tu.name, input: tu.input });
             let result: unknown;
             try {
-              result = await executeTool(tu.name, tu.input as Record<string, unknown>);
+              result = await executeTool(tu.name, tu.input as Record<string, unknown>, { branch });
             } catch (e) {
               result = { ok: false, error: e instanceof Error ? e.message : String(e) };
             }

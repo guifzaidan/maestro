@@ -8,7 +8,7 @@ import type { TableMapping } from "../table-mapping";
 export interface ConnectionDTO {
   id: string;
   connector: string;
-  workspace: string | null;
+  branch: string | null;
   name: string | null;
   config: Record<string, unknown> | null;
   connected: boolean;
@@ -21,7 +21,7 @@ function toDTO(row: Connection): ConnectionDTO {
   return {
     id: row.id,
     connector: row.connector,
-    workspace: row.workspace,
+    branch: row.branch,
     name: row.name,
     config: row.config ? (JSON.parse(row.config) as Record<string, unknown>) : null,
     connected: row.connected,
@@ -31,10 +31,10 @@ function toDTO(row: Connection): ConnectionDTO {
   };
 }
 
-export async function listConnections(workspace?: string): Promise<ConnectionDTO[]> {
+export async function listConnections(branch?: string): Promise<ConnectionDTO[]> {
   await ensureSchema();
-  const rows = workspace
-    ? await db.select().from(connections).where(or(eq(connections.workspace, workspace), isNull(connections.workspace)))
+  const rows = branch
+    ? await db.select().from(connections).where(or(eq(connections.branch, branch), isNull(connections.branch)))
     : await db.select().from(connections);
   return rows.map(toDTO);
 }
@@ -42,7 +42,7 @@ export async function listConnections(workspace?: string): Promise<ConnectionDTO
 export interface UpsertConnectionInput {
   id?: string;
   connector: string;
-  workspace?: string | null;
+  branch?: string | null;
   name?: string | null;
   config?: Record<string, unknown> | null;
   /** segredo em claro; string vazia/undefined = manter o atual */
@@ -66,7 +66,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Co
   if (existing) {
     const fields: Partial<Connection> = { updatedAt: now, secret };
     if (input.connector !== undefined) fields.connector = input.connector;
-    if (input.workspace !== undefined) fields.workspace = input.workspace;
+    if (input.branch !== undefined) fields.branch = input.branch;
     if (input.name !== undefined) fields.name = input.name;
     if (input.config !== undefined) fields.config = input.config ? JSON.stringify(input.config) : null;
     if (input.connected !== undefined) fields.connected = input.connected;
@@ -78,7 +78,7 @@ export async function upsertConnection(input: UpsertConnectionInput): Promise<Co
   const row: Connection = {
     id: input.id ?? crypto.randomUUID(),
     connector: input.connector,
-    workspace: input.workspace ?? null,
+    branch: input.branch ?? null,
     name: input.name ?? null,
     config: input.config ? JSON.stringify(input.config) : null,
     secret,
@@ -125,7 +125,35 @@ export interface ImportSpec {
   token: string | null;
   tables: string[];
   mappings: Record<string, TableMapping>;
-  workspace: string | null;
+  branch: string | null;
+}
+
+/** Alvo Turso (server-side) com credenciais decifradas, para o agente consultar. */
+export interface TursoTarget {
+  id: string;
+  name: string | null;
+  url: string;
+  token: string | null;
+}
+
+/**
+ * Lista as conexões Turso de uma branch (mais as globais, branch null) com
+ * url + token decifrado. Uso EXCLUSIVO do servidor (agente). Nunca exponha.
+ */
+export async function listTursoTargets(branch: string): Promise<TursoTarget[]> {
+  await ensureSchema();
+  const rows = await db
+    .select()
+    .from(connections)
+    .where(or(eq(connections.branch, branch), isNull(connections.branch)));
+  return rows
+    .filter((r) => r.connector === "turso")
+    .map((r) => {
+      const url = r.config ? ((JSON.parse(r.config) as { url?: string }).url ?? "") : "";
+      const token = r.secret ? decryptSecret(r.secret) : null;
+      return { id: r.id, name: r.name, url, token };
+    })
+    .filter((t) => t.url);
 }
 
 export async function getImportSpec(id: string): Promise<ImportSpec | null> {
@@ -140,6 +168,6 @@ export async function getImportSpec(id: string): Promise<ImportSpec | null> {
     token: row.secret ? decryptSecret(row.secret) : null,
     tables: Array.isArray(cfg.tables) ? cfg.tables : [],
     mappings: cfg.mappings ?? {},
-    workspace: row.workspace,
+    branch: row.branch,
   };
 }

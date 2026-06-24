@@ -40,7 +40,7 @@ export function ConnectorsList({ withScopeFilter = false }: { withScopeFilter?: 
     withScopeFilter && scope !== "all" ? CONNECTORS.filter((c) => c.scopes.includes(scope)) : CONNECTORS;
 
   // DB é a fonte da verdade quando há registro; senão cai no estado mock.
-  // IDs de conexões não-DB são compostos: `${connectorId}--${workspace}`.
+  // IDs de conexões não-DB são compostos: `${connectorId}--${branch}`.
   const isConnected = (c: Connector) => {
     if (c.category === "db") return false;
     const row = persisted.find((p) => p.id === `${c.id}--${active}`);
@@ -77,7 +77,7 @@ export function ConnectorsList({ withScopeFilter = false }: { withScopeFilter?: 
               open={openId === c.id}
               onToggle={() => setOpenId(openId === c.id ? null : c.id)}
               onChanged={reload}
-              workspace={active}
+              branch={active}
             />
           </motion.div>
         ))}
@@ -93,7 +93,7 @@ function ConnectorCard({
   open,
   onToggle,
   onChanged,
-  workspace,
+  branch,
 }: {
   connector: Connector;
   self?: ConnectionDTO;
@@ -101,7 +101,7 @@ function ConnectorCard({
   open: boolean;
   onToggle: () => void;
   onChanged: () => void;
-  workspace: string;
+  branch: string;
 }) {
   const { toast } = useToast();
   const [connected, setConnected] = useState(self?.connected ?? connector.connected);
@@ -118,9 +118,9 @@ function ConnectorCard({
     setSaving(true);
     try {
       await saveConnection({
-        id: `${connector.id}--${workspace}`,
+        id: `${connector.id}--${branch}`,
         connector: connector.id,
-        workspace,
+        branch,
         connected: nextConnected,
         secret: cred || undefined,
       });
@@ -306,7 +306,7 @@ function TursoConnections({ rows, onChanged }: { rows: ConnectionDTO[]; onChange
       await saveConnection({
         id,
         connector: "turso",
-        workspace: active,
+        branch: active,
         name: c.name,
         config: { url: c.url, tables: c.selected, mappings: c.mappings },
         secret: tokens[id] || undefined,

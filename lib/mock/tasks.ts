@@ -5,7 +5,7 @@ export type TaskList = "seg" | "ter" | "qua" | "qui" | "sex" | "sab" | "dom";
 export interface Task {
   id: string;
   title: string;
-  workspace: WorkspaceId;
+  branch: WorkspaceId;
   list: TaskList;
   done: boolean;
   due?: string;

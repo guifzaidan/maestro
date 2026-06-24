@@ -1,20 +1,44 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 
 /**
- * Criptografia simétrica AES-256-GCM para segredos de conexão (tokens, keys).
- * A chave vem de CONNECTIONS_SECRET (32 bytes em base64 ou hex). Os segredos
- * são cifrados antes de ir pro banco e só decifrados no servidor — o cliente
- * nunca recebe o valor em claro.
+ * Criptografia simétrica AES-256-GCM para segredos (tokens Claude, keys de conexão).
+ * A chave vem de CONNECTIONS_SECRET (32 bytes em base64/hex) quando definida. Se
+ * ausente, é auto-gerada e persistida em `.connections.key` (gitignored) — assim
+ * o sistema funciona sem nenhuma configuração manual de env. Os segredos são
+ * cifrados antes de ir pro banco e só decifrados no servidor; o cliente nunca
+ * recebe o valor em claro.
  *
  * Formato do payload: base64(iv).base64(authTag).base64(ciphertext)
  */
 
-function getKey(): Buffer {
-  const raw = process.env.CONNECTIONS_SECRET;
-  if (!raw) throw new Error("CONNECTIONS_SECRET ausente — defina uma chave de 32 bytes (base64/hex).");
-  const key = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
-  if (key.length !== 32) throw new Error("CONNECTIONS_SECRET deve ter 32 bytes (256 bits).");
+const KEY_FILE = join(process.cwd(), ".connections.key");
+let cachedKey: Buffer | null = null;
+
+/** Lê a chave do arquivo local ou gera+persiste uma nova (32 bytes). */
+function fileKey(): Buffer {
+  if (existsSync(KEY_FILE)) {
+    const raw = readFileSync(KEY_FILE, "utf8").trim();
+    const key = Buffer.from(raw, "base64");
+    if (key.length === 32) return key;
+  }
+  const key = randomBytes(32);
+  writeFileSync(KEY_FILE, key.toString("base64"), { mode: 0o600 });
   return key;
+}
+
+function getKey(): Buffer {
+  if (cachedKey) return cachedKey;
+  const raw = process.env.CONNECTIONS_SECRET;
+  if (raw) {
+    const key = /^[0-9a-fA-F]{64}$/.test(raw) ? Buffer.from(raw, "hex") : Buffer.from(raw, "base64");
+    if (key.length !== 32) throw new Error("CONNECTIONS_SECRET deve ter 32 bytes (256 bits).");
+    cachedKey = key;
+  } else {
+    cachedKey = fileKey();
+  }
+  return cachedKey;
 }
 
 export function encryptSecret(plain: string): string {

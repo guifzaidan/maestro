@@ -78,10 +78,10 @@ const ROW_CAP = 1000;
 
 /**
  * Lê as tabelas selecionadas de uma conexão Turso e cria/atualiza tasks
- * vinculadas (por connection+table+pk) no workspace informado. Status é
+ * vinculadas (por connection+table+pk) na branch informada. Status é
  * sincronizado a partir da fonte externa (one-way: externo → hub).
  */
-export async function importConnection(connectionId: string, workspace: string): Promise<ImportResult> {
+export async function importConnection(connectionId: string, branch: string): Promise<ImportResult> {
   await ensureSchema();
   const spec = await getImportSpec(connectionId);
   if (!spec) throw new Error("conexão não encontrada");
@@ -122,13 +122,13 @@ export async function importConnection(connectionId: string, workspace: string):
           )))[0];
 
         if (existing) {
-          await db.update(tasks).set({ title, due, done, list, workspace }).where(eq(tasks.id, existing.id));
+          await db.update(tasks).set({ title, due, done, list, branch }).where(eq(tasks.id, existing.id));
           result.updated++;
         } else {
           const newRow: NewTask = {
             id: crypto.randomUUID(),
             title,
-            workspace,
+            branch,
             list,
             done,
             due,

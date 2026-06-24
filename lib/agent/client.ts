@@ -16,7 +16,7 @@ export interface AgentHandlers {
  * chegam. Passe um AbortSignal para poder interromper.
  */
 export async function streamAgent(
-  body: { workspace: string; messages: AgentMessage[] },
+  body: { branch: string; messages: AgentMessage[] },
   handlers: AgentHandlers,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -81,8 +81,9 @@ export async function streamAgent(
 const TOOL_LABELS: Record<string, string> = {
   criar_tarefa: "Criando tarefa",
   consultar_tarefas: "Consultando tarefas",
-  criar_documento: "Criando documento",
-  criar_planilha: "Criando planilha",
+  listar_bases_de_dados: "Explorando bases de dados",
+  consultar_base_de_dados: "Consultando base de dados",
+  gerar_artefato: "Gerando arquivo",
 };
 
 export function toolLabel(name: string): string {

@@ -8,12 +8,12 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await request.json();
-  if (!body?.title || !body?.workspace) {
-    return NextResponse.json({ error: "title e workspace são obrigatórios" }, { status: 400 });
+  if (!body?.title || !body?.branch) {
+    return NextResponse.json({ error: "title e branch são obrigatórios" }, { status: 400 });
   }
   const task = await createTask({
     title: body.title,
-    workspace: body.workspace,
+    branch: body.branch,
     list: body.list ?? null,
     due: body.due ?? null,
     tools: body.tools ?? null,
@@ -30,11 +30,11 @@ export async function PATCH(request: Request) {
   if (typeof body.done === "boolean") {
     await toggleTask(body.id, body.done);
   } else {
-    const fields: { title?: string; due?: string | null; instruction?: string | null; workspace?: string } = {};
+    const fields: { title?: string; due?: string | null; instruction?: string | null; branch?: string } = {};
     if (typeof body.title === "string" && body.title.trim()) fields.title = body.title.trim();
     if ("due" in body) fields.due = body.due ?? null;
     if ("instruction" in body) fields.instruction = body.instruction ?? null;
-    if (typeof body.workspace === "string" && body.workspace.trim()) fields.workspace = body.workspace.trim();
+    if (typeof body.branch === "string" && body.branch.trim()) fields.branch = body.branch.trim();
     if (Object.keys(fields).length === 0)
       return NextResponse.json({ error: "nenhum campo para atualizar" }, { status: 400 });
     await updateTask(body.id, fields);

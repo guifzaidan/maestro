@@ -1,70 +1,129 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { createTask, listTasks } from "@/lib/db/tasks";
+import { listBranches } from "@/lib/db/branches";
+import { listTursoTargets, type TursoTarget } from "@/lib/db/connections";
+import { introspectTurso } from "@/lib/turso-introspect";
+import { queryTurso } from "@/lib/turso-query";
+import { buildArtifact, type ArtifactFormat } from "./artifacts";
+import { BRANCH_IDS } from "@/lib/theme";
 
-/** Definições de ferramenta enviadas à Claude. */
-export const TOOLS: Anthropic.Tool[] = [
-  {
-    name: "criar_tarefa",
-    description:
-      "Cria uma tarefa no hub e persiste no banco. Use quando o usuário quer registrar algo para fazer depois (não execução imediata).",
-    input_schema: {
-      type: "object",
-      properties: {
-        title: { type: "string", description: "Título curto e claro da tarefa" },
-        workspace: { type: "string", enum: ["dux", "sheep", "pessoal"], description: "Branch da tarefa" },
-        due: { type: "string", description: "Prazo no formato dd/mm/aaaa, ou range 'dd/mm/aaaa – dd/mm/aaaa'. Opcional." },
-        list: { type: "string", enum: ["seg", "ter", "qua", "qui", "sex", "sab", "dom"], description: "Dia da semana. Opcional." },
-        tools: { type: "array", items: { type: "string" }, description: "Ferramentas/conectores relevantes. Opcional." },
-        instruction: { type: "string", description: "Detalhe do que precisa ser feito. Opcional." },
+/** Contexto de execução de uma ferramenta — sabe a branch ativa. */
+export interface ToolContext {
+  branch: string;
+}
+
+/**
+ * Monta as definições de ferramenta enviadas à Claude. É dinâmico: o enum de
+ * branches vem do banco, então branches novas (ex: ChipTech) são reconhecidas.
+ */
+export async function buildTools(): Promise<Anthropic.Tool[]> {
+  const branches = await listBranches();
+  const branchIds = branches.map((b) => b.id);
+  const branchEnum = branchIds.length > 0 ? branchIds : [BRANCH_IDS.pessoal];
+
+  return [
+    {
+      name: "criar_tarefa",
+      description:
+        "Cria uma tarefa no hub e persiste no banco. Use quando o usuário quer registrar algo para fazer depois (não execução imediata). Se a branch não for dita, use a branch ativa.",
+      input_schema: {
+        type: "object",
+        properties: {
+          title: { type: "string", description: "Título curto e claro da tarefa" },
+          branch: { type: "string", enum: branchEnum, description: "Branch da tarefa. Omita para usar a branch ativa." },
+          due: { type: "string", description: "Prazo no formato dd/mm/aaaa. Opcional." },
+          list: { type: "string", enum: ["seg", "ter", "qua", "qui", "sex", "sab", "dom"], description: "Dia da semana. Opcional." },
+          tools: { type: "array", items: { type: "string" }, description: "Ferramentas/conectores relevantes. Opcional." },
+          instruction: { type: "string", description: "Detalhe do que precisa ser feito. Opcional." },
+        },
+        required: ["title"],
       },
-      required: ["title", "workspace"],
     },
-  },
-  {
-    name: "consultar_tarefas",
-    description: "Lê as tarefas já registradas no banco. Use para consultar o que existe antes de criar duplicatas ou para responder perguntas.",
-    input_schema: {
-      type: "object",
-      properties: {
-        workspace: { type: "string", enum: ["dux", "sheep", "pessoal"], description: "Filtrar por branch. Opcional." },
+    {
+      name: "consultar_tarefas",
+      description: "Lê as tarefas registradas no hub. Use para consultar o que existe antes de criar duplicatas ou para responder perguntas.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", enum: branchEnum, description: "Filtrar por branch. Omita para a branch ativa." },
+          todas: { type: "boolean", description: "true = todas as branches (ignora o filtro). Opcional." },
+        },
       },
     },
-  },
-  {
-    name: "criar_documento",
-    description: "Cria um documento (Google Docs). ATENÇÃO: conector ainda não conectado — por enquanto simula a criação e retorna um link fictício.",
-    input_schema: {
-      type: "object",
-      properties: {
-        titulo: { type: "string" },
-        conteudo: { type: "string", description: "Conteúdo em markdown" },
+    {
+      name: "listar_bases_de_dados",
+      description:
+        "Lista as bases de dados (Turso) conectadas à branch ativa, com suas tabelas, colunas e contagem de linhas. Use ISSO PRIMEIRO antes de consultar dados, para descobrir o schema.",
+      input_schema: {
+        type: "object",
+        properties: {
+          incluir_schema: { type: "boolean", description: "Incluir colunas de cada tabela (padrão true)." },
+        },
       },
-      required: ["titulo"],
     },
-  },
-  {
-    name: "criar_planilha",
-    description: "Cria uma planilha (Google Sheets). ATENÇÃO: conector ainda não conectado — por enquanto simula e retorna um link fictício.",
-    input_schema: {
-      type: "object",
-      properties: {
-        titulo: { type: "string" },
-        colunas: { type: "array", items: { type: "string" } },
+    {
+      name: "consultar_base_de_dados",
+      description:
+        "Executa uma consulta SQL SELECT (read-only) numa base de dados conectada à branch e retorna as linhas. Use o schema de listar_bases_de_dados para montar o SQL. Máx. 500 linhas.",
+      input_schema: {
+        type: "object",
+        properties: {
+          conexao_id: { type: "string", description: "Id da conexão (de listar_bases_de_dados). Omita se houver só uma base." },
+          sql: { type: "string", description: "Uma única consulta SELECT/WITH. Sem INSERT/UPDATE/DELETE/DDL." },
+        },
+        required: ["sql"],
       },
-      required: ["titulo"],
     },
-  },
-];
+    {
+      name: "gerar_artefato",
+      description:
+        "Gera um arquivo baixável a partir de conteúdo que você produz. Use para documentos, tabelas, relatórios e exports. " +
+        "Formatos: 'xlsx' (Excel nativo — passe o conteúdo como CSV), 'docx' (Word nativo — passe o conteúdo como Markdown com #, listas e tabelas), " +
+        "'csv' (planilha simples), 'md' (markdown), 'html' (documento imprimível em PDF), 'json', 'txt'. " +
+        "Para planilha de dados, prefira 'xlsx'. Para documento formatado, prefira 'docx'.",
+      input_schema: {
+        type: "object",
+        properties: {
+          nome: { type: "string", description: "Nome do arquivo (sem extensão), ex: 'relatorio-chiptech'." },
+          formato: { type: "string", enum: ["xlsx", "docx", "csv", "md", "html", "json", "txt"], description: "Formato do arquivo." },
+          conteudo: {
+            type: "string",
+            description: "Conteúdo completo. Para 'xlsx' → CSV (cabeçalho na 1ª linha). Para 'docx' → Markdown. Para os demais → o próprio formato (markdown, HTML, CSV, JSON, texto).",
+          },
+        },
+        required: ["nome", "formato", "conteudo"],
+      },
+    },
+  ];
+}
 
 type ToolInput = Record<string, unknown>;
 
+/** Resume um TursoTarget + tabelas para o agente (sem expor o token). */
+async function describeTarget(t: TursoTarget, includeSchema: boolean) {
+  try {
+    const tables = await introspectTurso(t.url, t.token);
+    return {
+      conexao_id: t.id,
+      nome: t.name ?? t.id,
+      tabelas: tables.map((tb) => ({
+        nome: tb.name,
+        linhas: tb.rowCount,
+        ...(includeSchema ? { colunas: tb.columns.map((c) => `${c.name}${c.pk ? " (pk)" : ""}: ${c.type}`) } : {}),
+      })),
+    };
+  } catch (e) {
+    return { conexao_id: t.id, nome: t.name ?? t.id, erro: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Executa uma ferramenta e devolve um resultado serializável. */
-export async function executeTool(name: string, input: ToolInput): Promise<unknown> {
+export async function executeTool(name: string, input: ToolInput, ctx: ToolContext): Promise<unknown> {
   switch (name) {
     case "criar_tarefa": {
       const task = await createTask({
         title: String(input.title ?? ""),
-        workspace: String(input.workspace ?? "pessoal"),
+        branch: String(input.branch ?? ctx.branch),
         due: (input.due as string) ?? null,
         list: (input.list as string) ?? null,
         tools: (input.tools as string[]) ?? null,
@@ -75,33 +134,47 @@ export async function executeTool(name: string, input: ToolInput): Promise<unkno
 
     case "consultar_tarefas": {
       const all = await listTasks();
-      const filtered = input.workspace
-        ? all.filter((t) => t.workspace === input.workspace)
-        : all;
+      const todas = input.todas === true;
+      const br = (input.branch as string) ?? ctx.branch;
+      const filtered = todas ? all : all.filter((t) => t.branch === br);
       return { ok: true, count: filtered.length, tasks: filtered };
     }
 
-    case "criar_documento": {
-      // Placeholder até o conector Google estar plugado.
-      const id = crypto.randomUUID().slice(0, 8);
-      return {
-        ok: true,
-        simulated: true,
-        titulo: input.titulo,
-        url: `https://docs.google.com/document/d/mock-${id}`,
-        nota: "Conector Google ainda não conectado — documento simulado.",
-      };
+    case "listar_bases_de_dados": {
+      const targets = await listTursoTargets(ctx.branch);
+      if (targets.length === 0) {
+        return { ok: true, bases: [], nota: "Nenhuma base de dados Turso conectada a esta branch." };
+      }
+      const includeSchema = input.incluir_schema !== false;
+      const bases = await Promise.all(targets.map((t) => describeTarget(t, includeSchema)));
+      return { ok: true, bases };
     }
 
-    case "criar_planilha": {
-      const id = crypto.randomUUID().slice(0, 8);
+    case "consultar_base_de_dados": {
+      const targets = await listTursoTargets(ctx.branch);
+      if (targets.length === 0) return { ok: false, error: "Nenhuma base Turso conectada a esta branch." };
+      const target = input.conexao_id
+        ? targets.find((t) => t.id === input.conexao_id)
+        : targets[0];
+      if (!target) return { ok: false, error: `Conexão '${input.conexao_id}' não encontrada nesta branch.` };
+      try {
+        const res = await queryTurso(target.url, target.token, String(input.sql ?? ""));
+        return { ok: true, conexao_id: target.id, ...res };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "gerar_artefato": {
+      const formato = String(input.formato ?? "md") as ArtifactFormat;
+      const nome = String(input.nome ?? "artefato");
+      const conteudo = String(input.conteudo ?? "");
+      if (!conteudo.trim()) return { ok: false, error: "Conteúdo vazio." };
+      const artifact = await buildArtifact(formato, nome, conteudo);
       return {
         ok: true,
-        simulated: true,
-        titulo: input.titulo,
-        colunas: input.colunas ?? [],
-        url: `https://docs.google.com/spreadsheets/d/mock-${id}`,
-        nota: "Conector Google ainda não conectado — planilha simulada.",
+        artifact,
+        nota: `Artefato '${artifact.filename}' gerado (${artifact.bytes} bytes).`,
       };
     }
 

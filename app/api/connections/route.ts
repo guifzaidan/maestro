@@ -3,8 +3,8 @@ import { listConnections, upsertConnection, deleteConnection } from "@/lib/db/co
 
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
-  const workspace = searchParams.get("workspace") ?? undefined;
-  const all = await listConnections(workspace);
+  const branch = searchParams.get("branch") ?? undefined;
+  const all = await listConnections(branch);
   return NextResponse.json({ connections: all });
 }
 
@@ -17,7 +17,7 @@ export async function POST(request: Request) {
     const connection = await upsertConnection({
       id: typeof body.id === "string" ? body.id : undefined,
       connector: body.connector,
-      workspace: body.workspace ?? null,
+      branch: body.branch ?? null,
       name: body.name ?? null,
       config: body.config ?? null,
       secret: typeof body.secret === "string" ? body.secret : undefined,

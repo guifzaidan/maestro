@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import type { Workspace } from "@/lib/theme";
+import { BRANCH_IDS, type Workspace } from "@/lib/theme";
 import { useWorkspace } from "@/lib/workspace-context";
 import { PageTransition } from "@/components/shell/page-transition";
 import { Topbar } from "@/components/shell/topbar";
@@ -108,15 +108,45 @@ function BranchesTab() {
 }
 
 const MOCK_STATS: Record<string, { tokensUsed: number; tokensLimit: number; costUsd: number; creditsUsd: number }> = {
-  dux:     { tokensUsed: 1_240_000, tokensLimit: 5_000_000, costUsd: 18.60, creditsUsd: 50 },
-  sheep:   { tokensUsed: 3_100_000, tokensLimit: 5_000_000, costUsd: 46.50, creditsUsd: 50 },
-  pessoal: { tokensUsed: 420_000,   tokensLimit: 2_000_000, costUsd: 6.30,  creditsUsd: 20 },
+  [BRANCH_IDS.dux]:     { tokensUsed: 1_240_000, tokensLimit: 5_000_000, costUsd: 18.60, creditsUsd: 50 },
+  [BRANCH_IDS.sheep]:   { tokensUsed: 3_100_000, tokensLimit: 5_000_000, costUsd: 46.50, creditsUsd: 50 },
+  [BRANCH_IDS.pessoal]: { tokensUsed: 420_000,   tokensLimit: 2_000_000, costUsd: 6.30,  creditsUsd: 20 },
 };
+
+const FALLBACK_STATS = MOCK_STATS[BRANCH_IDS.pessoal];
 
 function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
   const { toast } = useToast();
+  const { reloadBranches } = useWorkspace();
   const [show, setShow] = useState(false);
-  const stats = MOCK_STATS[w.id] ?? MOCK_STATS.pessoal;
+  const [tokenInput, setTokenInput] = useState("");
+  const [saving, setSaving] = useState(false);
+  const stats = MOCK_STATS[w.id] ?? FALLBACK_STATS;
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch("/api/branches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: w.id, name: w.name, short: w.short, icon: w.icon,
+          accent: w.accent, accent2: w.accent2, accentSoft: w.accentSoft, tagline: w.tagline,
+          // Só envia token se o usuário digitou algo (senão preserva o salvo).
+          ...(tokenInput.trim() ? { claudeToken: tokenInput.trim() } : {}),
+        }),
+      });
+      if (!res.ok) throw new Error();
+      const tokenChanged = !!tokenInput.trim();
+      setTokenInput("");
+      await reloadBranches();
+      toast(tokenChanged ? `Token da ${w.name} salvo` : `Identidade da ${w.name} salva`, "success");
+    } catch {
+      toast("Falha ao salvar", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
   const tokenPct = Math.round((stats.tokensUsed / stats.tokensLimit) * 100);
   const costPct   = Math.round((stats.costUsd / stats.creditsUsd) * 100);
 
@@ -146,13 +176,24 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
           </label>
           <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5 transition-colors focus-within:border-[var(--border-strong)]">
             <input
-              readOnly
-              value={show ? "sk-ant-api03-x7Qd...DEMO" : MASKED}
-              className="min-w-0 flex-1 bg-transparent font-mono text-sm outline-none"
+              type={show ? "text" : "password"}
+              value={tokenInput}
+              onChange={(e) => setTokenInput(e.target.value)}
+              placeholder={w.hasToken ? `${MASKED} — cole para trocar` : "sk-ant-api03-..."}
+              spellCheck={false}
+              autoComplete="off"
+              className="min-w-0 flex-1 bg-transparent font-mono text-sm outline-none placeholder:text-muted-2"
             />
-            <motion.button whileHover={{ scale: 1.05 }} onClick={() => setShow((s) => !s)} className="text-xs text-muted hover:text-white">
-              {show ? "ocultar" : "mostrar"}
-            </motion.button>
+            {w.hasToken && !tokenInput && (
+              <span className="flex items-center gap-1 text-[10px] text-emerald-400/80" title="Token salvo e cifrado">
+                <Icon name="Shield" size={12} /> salvo
+              </span>
+            )}
+            {tokenInput && (
+              <motion.button whileHover={{ scale: 1.05 }} type="button" onClick={() => setShow((s) => !s)} className="text-xs text-muted hover:text-white">
+                {show ? "ocultar" : "mostrar"}
+              </motion.button>
+            )}
           </div>
         </div>
 
@@ -227,15 +268,18 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
 
       {/* Footer */}
       <div className="mt-4 flex items-center justify-between border-t border-[var(--border)] pt-4">
-        <span className="text-xs text-muted-2">Última verificação da chave: há 2 dias</span>
+        <span className="text-xs text-muted-2">
+          {w.hasToken ? "Token Claude cifrado no banco" : "Nenhum token Claude configurado"}
+        </span>
         <motion.button
-          whileHover={{ scale: 1.05, boxShadow: `0 0 18px -5px ${w.accent}` }}
-          whileTap={{ scale: 0.95 }}
-          onClick={() => toast(`Identidade da ${w.name} salva`, "success")}
-          className="rounded-full px-3.5 py-1.5 text-xs font-medium text-white"
+          whileHover={{ scale: saving ? 1 : 1.05, boxShadow: saving ? undefined : `0 0 18px -5px ${w.accent}` }}
+          whileTap={{ scale: saving ? 1 : 0.95 }}
+          onClick={handleSave}
+          disabled={saving}
+          className="rounded-full px-3.5 py-1.5 text-xs font-medium text-white disabled:opacity-50"
           style={{ background: `linear-gradient(135deg, ${w.accent}, ${w.accent2})` }}
         >
-          Salvar
+          {saving ? "Salvando…" : "Salvar"}
         </motion.button>
       </div>
     </GlassCard>
