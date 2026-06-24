@@ -318,7 +318,16 @@ export function HubView() {
     let roundText = "";
     let roundId: string | null = null;
     let seq = 0;
-    const closeRound = () => { roundId = null; roundText = ""; };
+    let rafPending = false;
+
+    // Atualiza o balão atual no máximo 1x por frame (coalesce os tokens) — fluido
+    // mesmo com texto grande, em vez de re-renderizar a cada token.
+    const flush = () => {
+      rafPending = false;
+      const id = roundId;
+      if (id) setMessages(prev => prev.map(m => m.id === id ? { ...m, content: roundText } : m));
+    };
+    const closeRound = () => { flush(); roundId = null; roundText = ""; };
 
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -336,9 +345,9 @@ export function HubView() {
             const id = `a${Date.now()}-${seq++}`;
             roundId = id;
             setMessages(prev => [...prev, { id, role: "assistant", content: roundText }]);
-          } else {
-            const id = roundId;
-            setMessages(prev => prev.map(m => m.id === id ? { ...m, content: roundText } : m));
+          } else if (!rafPending) {
+            rafPending = true;
+            requestAnimationFrame(flush);
           }
         },
         onToolStart: (e) => {
@@ -368,6 +377,7 @@ export function HubView() {
           }
         },
         onDone: () => {
+          flush(); // garante o conteúdo final do último balão
           abortRef.current = null;
           setIsTyping(false);
           setChatBusy(false);
@@ -855,7 +865,7 @@ export function HubView() {
                         className="flex flex-col items-start gap-2">
                         {msg.content && (
                           <div className="max-w-[80%] whitespace-pre-wrap rounded-2xl rounded-bl-sm px-4 py-2.5 text-sm leading-relaxed"
-                            style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.75)" }}>
+                            style={{ background: "rgba(28,28,32,0.62)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.82)" }}>
                             {renderInline(msg.content)}
                           </div>
                         )}
@@ -880,8 +890,8 @@ export function HubView() {
                         transition={{ type: "spring", stiffness: 300, damping: 28 }}
                         className={cn("flex", msg.role === "user" ? "justify-end" : "justify-start")}>
                         <div className={cn("max-w-[80%] whitespace-pre-wrap rounded-2xl px-4 py-2.5 text-sm leading-relaxed", msg.role === "user" ? "rounded-br-sm" : "rounded-bl-sm")}
-                          style={msg.role === "user" ? { background: "rgba(255,255,255,0.10)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff" }
-                            : { background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.75)" }}>
+                          style={msg.role === "user" ? { background: "rgba(255,255,255,0.12)", border: "1px solid rgba(255,255,255,0.15)", color: "#fff" }
+                            : { background: "rgba(28,28,32,0.62)", border: "1px solid rgba(255,255,255,0.08)", color: "rgba(255,255,255,0.82)" }}>
                           {msg.role === "assistant" ? (msg.content ? renderInline(msg.content) : "…") : msg.content}
                         </div>
                       </motion.div>
@@ -908,7 +918,7 @@ export function HubView() {
               </div>
 
               <div className="flex items-end gap-3 rounded-2xl px-4 py-2.5"
-                style={{ background: "rgba(255,255,255,0.05)", backdropFilter: "blur(14px)", WebkitBackdropFilter: "blur(14px)", border: "1px solid rgba(255,255,255,0.1)" }}>
+                style={{ background: "rgba(28,28,32,0.62)", border: "1px solid rgba(255,255,255,0.1)" }}>
                 <textarea ref={chatInputRef} value={chatInput} onChange={(e) => setChatInput(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendChatMessage(); } }}
                   placeholder={chatBusy ? "Maestro está respondendo…" : "Descreva o que precisa…"} autoFocus disabled={chatBusy}
