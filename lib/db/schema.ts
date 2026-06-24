@@ -1,4 +1,4 @@
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 
 /**
  * Branches (contextos de trabalho): DUX, Sheep Tech, Pessoal, etc.
@@ -72,6 +72,20 @@ export const connections = sqliteTable("connections", {
   updatedAt: integer("updated_at").notNull(),
 });
 
+/**
+ * Consumo real do agente por branch (uma linha por chamada à Claude). Usado
+ * para mostrar tokens/custo reais no mês. `costUsd` é estimado pelos tokens.
+ */
+export const usage = sqliteTable("usage", {
+  id:           text("id").primaryKey(),
+  branch:       text("branch_id").notNull().references(() => branches.id),
+  model:        text("model"),
+  inputTokens:  integer("input_tokens").notNull().default(0),
+  outputTokens: integer("output_tokens").notNull().default(0),
+  costUsd:      real("cost_usd").notNull().default(0),
+  createdAt:    integer("created_at").notNull(),
+});
+
 export type Branch       = typeof branches.$inferSelect;
 export type NewBranch    = typeof branches.$inferInsert;
 export type Task         = typeof tasks.$inferSelect;
@@ -80,3 +94,5 @@ export type AgentRun     = typeof agentRuns.$inferSelect;
 export type Message      = typeof messages.$inferSelect;
 export type Connection   = typeof connections.$inferSelect;
 export type NewConnection = typeof connections.$inferInsert;
+export type Usage        = typeof usage.$inferSelect;
+export type NewUsage     = typeof usage.$inferInsert;

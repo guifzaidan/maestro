@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { buildTools, executeTool } from "@/lib/agent/tools";
 import { buildSystemPrompt } from "@/lib/agent/prompt";
 import { getBranchToken } from "@/lib/db/branches";
+import { recordUsage } from "@/lib/db/usage";
 import { BRANCH_IDS } from "@/lib/theme";
 
 export const runtime = "nodejs";
@@ -58,6 +59,14 @@ export async function POST(request: Request) {
 
           const final = await ms.finalMessage();
           convo.push({ role: "assistant", content: final.content });
+
+          // Registra o consumo real desta rodada (tokens de input + output).
+          recordUsage({
+            branch,
+            model: MODEL,
+            inputTokens: final.usage?.input_tokens ?? 0,
+            outputTokens: final.usage?.output_tokens ?? 0,
+          }).catch(() => {});
 
           const toolUses = final.content.filter(
             (b): b is Anthropic.ToolUseBlock => b.type === "tool_use",

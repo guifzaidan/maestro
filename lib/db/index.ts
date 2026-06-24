@@ -71,6 +71,15 @@ export function ensureSchema() {
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
           )`,
+          `CREATE TABLE IF NOT EXISTS usage (
+            id TEXT PRIMARY KEY,
+            branch_id TEXT NOT NULL REFERENCES branches(id),
+            model TEXT,
+            input_tokens INTEGER NOT NULL DEFAULT 0,
+            output_tokens INTEGER NOT NULL DEFAULT 0,
+            cost_usd REAL NOT NULL DEFAULT 0,
+            created_at INTEGER NOT NULL
+          )`,
         ],
         "write",
       );

@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { BRANCH_IDS, type Workspace } from "@/lib/theme";
+import type { Workspace } from "@/lib/theme";
 import { useWorkspace } from "@/lib/workspace-context";
 import { PageTransition } from "@/components/shell/page-transition";
 import { Topbar } from "@/components/shell/topbar";
@@ -107,13 +107,9 @@ function BranchesTab() {
   );
 }
 
-const MOCK_STATS: Record<string, { tokensUsed: number; tokensLimit: number; costUsd: number; creditsUsd: number }> = {
-  [BRANCH_IDS.dux]:     { tokensUsed: 1_240_000, tokensLimit: 5_000_000, costUsd: 18.60, creditsUsd: 50 },
-  [BRANCH_IDS.sheep]:   { tokensUsed: 3_100_000, tokensLimit: 5_000_000, costUsd: 46.50, creditsUsd: 50 },
-  [BRANCH_IDS.pessoal]: { tokensUsed: 420_000,   tokensLimit: 2_000_000, costUsd: 6.30,  creditsUsd: 20 },
-};
+interface BranchStats { tokensUsed: number; tokensLimit: number; costUsd: number; creditsUsd: number }
 
-const FALLBACK_STATS = MOCK_STATS[BRANCH_IDS.pessoal];
+const EMPTY_STATS: BranchStats = { tokensUsed: 0, tokensLimit: 5_000_000, costUsd: 0, creditsUsd: 50 };
 
 function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
   const { toast } = useToast();
@@ -121,7 +117,15 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
   const [show, setShow] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [saving, setSaving] = useState(false);
-  const stats = MOCK_STATS[w.id] ?? FALLBACK_STATS;
+  const [stats, setStats] = useState<BranchStats>(EMPTY_STATS);
+
+  // Consumo REAL do mês (tokens + custo) — registrado a cada chamada do agente.
+  useEffect(() => {
+    fetch(`/api/branches/usage?branch=${encodeURIComponent(w.id)}`)
+      .then((r) => r.json())
+      .then((d) => { if (d && typeof d.tokensUsed === "number") setStats(d); })
+      .catch(() => {});
+  }, [w.id]);
 
   const handleSave = async () => {
     setSaving(true);
