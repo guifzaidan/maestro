@@ -246,7 +246,7 @@ export function TaskBoard() {
         {deleteTarget && (
           <ConfirmDeleteModal
             title={deleteTarget.title}
-            onConfirm={() => removeTask(deleteTarget.id)}
+            onConfirm={() => { removeTask(deleteTarget.id); setEditTarget(null); }}
             onCancel={() => setDeleteTarget(null)}
           />
         )}
@@ -258,6 +258,7 @@ export function TaskBoard() {
             task={editTarget}
             onSave={(fields) => saveTaskEdit(editTarget.id, fields)}
             onCancel={() => setEditTarget(null)}
+            onDelete={() => requestDelete(editTarget.id, editTarget.title)}
           />
         )}
       </AnimatePresence>
@@ -415,14 +416,9 @@ function dateForList(list: TaskList): Date {
   return new Date(now.getFullYear(), now.getMonth(), monday + LIST_TO_DAY_OFFSET[list]);
 }
 
-/**
- * Faz o parse do campo `due` (dd/mm/yyyy, ou range "dd/mm/yyyy – dd/mm/yyyy")
- * e retorna {year, month, day} usando a data inicial. null se vazio/inválido.
- */
 function parseDue(due: string | undefined | null): { year: number; month: number; day: number } | null {
   if (!due) return null;
-  const first = due.split(" – ")[0]?.trim() ?? "";
-  const m = first.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  const m = due.trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
   if (!m) return null;
   return { day: Number(m[1]), month: Number(m[2]) - 1, year: Number(m[3]) };
 }
@@ -786,10 +782,11 @@ const FIELD_STYLE = {
   border: "1px solid rgba(255,255,255,0.10)",
 } as React.CSSProperties;
 
-function EditTaskModal({ task, onSave, onCancel }: {
+function EditTaskModal({ task, onSave, onCancel, onDelete }: {
   task: Task;
   onSave: (fields: { title: string; due?: string; description?: string; workspace?: string }) => void;
   onCancel: () => void;
+  onDelete: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [due, setDue] = useState(task.due ?? "");
@@ -845,7 +842,19 @@ function EditTaskModal({ task, onSave, onCancel }: {
         className="mx-4 w-full max-w-[420px] rounded-2xl p-5"
         style={GLASS_MODAL}
       >
-        <p className="mb-5 text-[15px] font-semibold text-white">Editar tarefa</p>
+        <div className="mb-5 flex items-center justify-between">
+          <p className="text-[15px] font-semibold text-white">Editar tarefa</p>
+          <motion.button
+            whileHover={{ scale: 1.08, background: "rgba(239,68,68,0.18)" }}
+            whileTap={{ scale: 0.93 }}
+            onClick={onDelete}
+            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl transition-colors"
+            style={{ background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.25)" }}
+            aria-label="Excluir tarefa"
+          >
+            <Icon name="Trash2" size={14} strokeWidth={1.75} style={{ color: "#f87171" }} />
+          </motion.button>
+        </div>
 
         <div className="flex flex-col gap-3">
           {/* Nome */}
@@ -993,7 +1002,7 @@ function ConfirmDeleteModal({ title, onConfirm, onCancel }: {
       animate={{ opacity: 1 }}
       exit={{ opacity: 0 }}
       transition={{ duration: 0.18 }}
-      className="fixed inset-0 z-[100] flex items-center justify-center"
+      className="fixed inset-0 z-[110] flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
       onClick={onCancel}
     >
@@ -1099,7 +1108,7 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         </span>
       )}
 
-      <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+      <div className="hidden sm:flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
         {onDelete && (
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(task.id, task.title); }}

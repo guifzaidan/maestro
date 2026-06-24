@@ -63,10 +63,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   );
 }
 
-/* ── Viewport (canto inferior direito) ─────────────────────────── */
+/* ── Viewport ───────────────────────────────────────────────────── */
+/* Mobile: topo centralizado — Desktop: canto inferior direito      */
 function ToastViewport({ toasts, onDismiss }: { toasts: Toast[]; onDismiss: (id: number) => void }) {
   return (
-    <div className="pointer-events-none fixed bottom-5 right-5 z-[200] flex w-[320px] max-w-[calc(100vw-2.5rem)] flex-col items-end gap-2.5">
+    <div className="pointer-events-none fixed z-[200] flex flex-col gap-2.5
+      top-5 left-1/2 -translate-x-1/2 items-center w-[320px] max-w-[calc(100vw-2.5rem)]
+      sm:top-auto sm:bottom-5 sm:left-auto sm:right-5 sm:translate-x-0 sm:items-end">
       <AnimatePresence initial={false}>
         {toasts.map((t) => (
           <ToastTile key={t.id} toast={t} onDismiss={() => onDismiss(t.id)} />
