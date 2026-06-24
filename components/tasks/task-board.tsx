@@ -191,6 +191,13 @@ export function TaskBoard() {
   const addTask = async (list: TaskList, title: string, due: string) => {
     const trimmed = title.trim();
     if (!trimmed) return;
+
+    // Otimista: mostra a task na hora com id temporário, reconcilia depois.
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const optimistic: Task = { id: tempId, title: trimmed, branch: active, list, done: false, due };
+    setTasks((prev) => [...prev, optimistic]);
+    toast("Tarefa criada", "create");
+
     try {
       const res = await fetch("/api/tasks", {
         method: "POST",
@@ -199,11 +206,14 @@ export function TaskBoard() {
       });
       const data = await res.json();
       if (data.task) {
-        setTasks((prev) => [...prev, toBoardTask(data.task)]);
-        toast("Tarefa criada", "create");
+        // Troca o placeholder pela task real (id do servidor).
+        setTasks((prev) => prev.map((t) => (t.id === tempId ? toBoardTask(data.task) : t)));
+      } else {
+        setTasks((prev) => prev.filter((t) => t.id !== tempId));
       }
     } catch {
-      /* ignore */
+      // Reverte se a criação falhar.
+      setTasks((prev) => prev.filter((t) => t.id !== tempId));
     }
   };
 
