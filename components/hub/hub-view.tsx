@@ -75,21 +75,78 @@ function renderMarkdown(text: string): ReactNode {
   const lines = text.split("\n");
   const blocks: ReactNode[] = [];
   let listItems: string[] = [];
+  let tableRows: string[][] = [];
+  let tableHasHeader = false;
   let key = 0;
+
+  const parseTableCells = (line: string) =>
+    line.split("|").slice(1, -1).map((c) => c.trim());
+
+  const isTableSep = (line: string) => /^\|?[\s|:-]+\|/.test(line);
 
   const flushList = () => {
     if (!listItems.length) return;
     blocks.push(
       <ul key={key++} className="my-1 list-disc space-y-0.5 pl-4">
-        {listItems.map((item, i) => (
-          <li key={i}>{renderInline(item)}</li>
-        ))}
+        {listItems.map((item, i) => <li key={i}>{renderInline(item)}</li>)}
       </ul>
     );
     listItems = [];
   };
 
-  for (const line of lines) {
+  const flushTable = () => {
+    if (!tableRows.length) return;
+    const [head, ...body] = tableRows;
+    blocks.push(
+      <div key={key++} className="my-2 overflow-x-auto">
+        <table className="w-full border-collapse text-[13px]">
+          {tableHasHeader && head ? (
+            <thead>
+              <tr>
+                {head.map((cell, i) => (
+                  <th key={i} className="border border-white/10 px-3 py-1.5 text-left font-semibold text-white/90"
+                    style={{ background: "rgba(255,255,255,0.07)" }}>
+                    {renderInline(cell)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          ) : null}
+          <tbody>
+            {(tableHasHeader ? body : tableRows).map((row, ri) => (
+              <tr key={ri}>
+                {row.map((cell, ci) => (
+                  <td key={ci} className="border border-white/10 px-3 py-1.5 text-white/75">
+                    {renderInline(cell)}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+    tableRows = [];
+    tableHasHeader = false;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const isTableLine = line.trim().startsWith("|") && line.trim().endsWith("|");
+
+    if (isTableLine) {
+      flushList();
+      if (isTableSep(line)) {
+        // linha separadora → a primeira linha acumulada é o header
+        tableHasHeader = true;
+      } else {
+        tableRows.push(parseTableCells(line));
+      }
+      continue;
+    }
+
+    flushTable();
+
     const listMatch = line.match(/^[-*]\s+(.+)$/);
     if (listMatch) {
       listItems.push(listMatch[1]);
@@ -102,7 +159,9 @@ function renderMarkdown(text: string): ReactNode {
       }
     }
   }
+
   flushList();
+  flushTable();
 
   return <>{blocks}</>;
 }
