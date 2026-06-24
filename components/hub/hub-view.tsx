@@ -25,6 +25,36 @@ interface MindNode   { id: string; label: string; value: string; type: "branch" 
 interface ArtifactData { filename: string; mime: string; base64: string; bytes: number; format?: string; }
 interface ExecEvent  { id: string; type: "log" | "assistant" | "user" | "done" | "artifact"; content: string; artifact?: ArtifactData; }
 
+/* ── Web Speech API (transcrição nativa, grátis) ───────────────── */
+interface SpeechRecognitionLike {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  start: () => void;
+  stop: () => void;
+  abort: () => void;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((e: { error: string }) => void) | null;
+  onend: (() => void) | null;
+}
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }>;
+}
+
+/** Cria um SpeechRecognition se o navegador suportar (Chrome/Edge). null se não. */
+function createRecognition(): SpeechRecognitionLike | null {
+  if (typeof window === "undefined") return null;
+  const w = window as unknown as { SpeechRecognition?: new () => SpeechRecognitionLike; webkitSpeechRecognition?: new () => SpeechRecognitionLike };
+  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+  if (!Ctor) return null;
+  const r = new Ctor();
+  r.lang = "pt-BR";
+  r.continuous = true;
+  r.interimResults = true;
+  return r;
+}
+
 /** Render leve de markdown inline: **negrito** e `código`. Quebras de linha via CSS. */
 function renderInline(text: string): ReactNode {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
@@ -67,6 +97,7 @@ export function HubView() {
   const [audioLevel, setAudioLevel] = useState(0);
   const [audioPhase, setAudioPhase] = useState<"listening" | "processing" | "done">("listening");
   const [micError, setMicError] = useState<string | null>(null);
+  const [transcript, setTranscript] = useState("");  // transcrição ao vivo (Web Speech API)
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatStep, setChatStep] = useState(0);
@@ -85,6 +116,8 @@ export function HubView() {
   const streamRef = useRef<MediaStream | null>(null);
   const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSoundRef = useRef<number>(0);
+  const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
+  const transcriptRef = useRef<string>(""); // transcrição final acumulada
   const chatEndRef = useRef<HTMLDivElement>(null);
   const execEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLInputElement>(null);
@@ -151,9 +184,32 @@ export function HubView() {
   const startMic = async () => {
     setMicError(null);
     lastSoundRef.current = 0;
+    setTranscript("");
+    transcriptRef.current = "";
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
       streamRef.current = stream;
+
+      // Transcrição real (Web Speech API). Sem suporte → segue só com a forma de onda.
+      const recog = createRecognition();
+      if (recog) {
+        recognitionRef.current = recog;
+        recog.onresult = (e) => {
+          let finals = "";
+          let interim = "";
+          for (let i = 0; i < e.results.length; i++) {
+            const res = e.results[i];
+            if (res.isFinal) finals += res[0].transcript;
+            else interim += res[0].transcript;
+          }
+          transcriptRef.current = finals.trim();
+          setTranscript((finals + interim).trim());
+        };
+        recog.onerror = (ev) => {
+          if (ev.error !== "no-speech" && ev.error !== "aborted") setMicError(`Transcrição: ${ev.error}`);
+        };
+        try { recog.start(); } catch { /* já iniciado */ }
+      }
       const ctx = new AudioContext();
       await ctx.resume();
       const analyser = ctx.createAnalyser();
@@ -171,13 +227,17 @@ export function HubView() {
         stream.getTracks().forEach((t) => t.stop());
         ctx.close().catch(() => {});
         audioCtxRef.current = null; analyserRef.current = null; streamRef.current = null;
+        try { recognitionRef.current?.stop(); } catch { /* ignore */ }
         setAudioLevel(0);
         setAudioPhase("processing");
         setTimeout(() => {
           setAudioPhase("done");
           setTimeout(() => {
             setAudioPhase("listening");
+            recognitionRef.current = null;
+            const said = transcriptRef.current.trim();
             startAgentChat();
+            if (said) sendText(said); // a fala vira a 1ª mensagem do agente
           }, 700);
         }, 2000);
       };
@@ -211,6 +271,8 @@ export function HubView() {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     audioCtxRef.current?.close().catch(() => {});
     audioCtxRef.current = null; analyserRef.current = null; streamRef.current = null;
+    try { recognitionRef.current?.abort(); } catch { /* ignore */ }
+    recognitionRef.current = null;
     setAudioLevel(0);
   };
 
@@ -622,6 +684,15 @@ export function HubView() {
                 {phase === "panel" && mode === "audio" && (
                   <motion.div key="listening" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} transition={{ duration: 0.25 }} className="mt-5 flex flex-col items-center gap-3">
                     {micError && <p className="text-xs text-red-400">{micError}</p>}
+                    {/* Transcrição ao vivo */}
+                    <AnimatePresence>
+                      {transcript && (audioPhase === "listening" || audioPhase === "processing") && (
+                        <motion.p key="transcript" initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                          className="max-w-[420px] text-center text-sm leading-relaxed text-white/85">
+                          {transcript}
+                        </motion.p>
+                      )}
+                    </AnimatePresence>
                     <AnimatePresence mode="wait">
                       {audioPhase === "listening" && (
                         <motion.button key="cancel" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} onClick={closePanel} className="cursor-pointer rounded-xl border border-white/10 bg-white/5 px-4 py-1.5 text-xs text-muted-2 backdrop-blur-sm transition-all hover:border-white/20 hover:bg-white/10 hover:text-white">
