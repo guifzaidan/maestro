@@ -72,6 +72,55 @@ export async function listLinearIssues(apiKey: string, filter: IssueFilter = {})
   return d.issues.nodes;
 }
 
+export interface LinearWorkflowState { id: string; name: string; type: string }
+
+export async function listLinearWorkflowStates(apiKey: string, teamId: string): Promise<LinearWorkflowState[]> {
+  const d = await linearGraphQL<{ workflowStates: { nodes: LinearWorkflowState[] } }>(
+    apiKey,
+    `query($teamId: String!) {
+      workflowStates(filter: { team: { id: { eq: $teamId } } }, first: 50) {
+        nodes { id name type }
+      }
+    }`,
+    { teamId },
+  );
+  return d.workflowStates.nodes;
+}
+
+export async function getLinearIssueByIdentifier(
+  apiKey: string,
+  identifier: string,
+): Promise<{ id: string; identifier: string; title: string; team: { id: string; name: string } } | null> {
+  const d = await linearGraphQL<{
+    issues: { nodes: Array<{ id: string; identifier: string; title: string; team: { id: string; name: string } }> };
+  }>(
+    apiKey,
+    `query($filter: IssueFilter) {
+      issues(filter: $filter, first: 1) {
+        nodes { id identifier title team { id name } }
+      }
+    }`,
+    { filter: { identifier: { eq: identifier.toUpperCase() } } },
+  );
+  return d.issues.nodes[0] ?? null;
+}
+
+export async function updateLinearIssue(
+  apiKey: string,
+  issueId: string,
+  input: { stateId?: string; title?: string; description?: string },
+): Promise<{ identifier: string; title: string; url: string }> {
+  const d = await linearGraphQL<{ issueUpdate: { success: boolean; issue: { identifier: string; title: string; url: string } } }>(
+    apiKey,
+    `mutation($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) { success issue { identifier title url } }
+    }`,
+    { id: issueId, input },
+  );
+  if (!d.issueUpdate?.success) throw new Error("Linear recusou a atualização do card.");
+  return d.issueUpdate.issue;
+}
+
 export interface CreatedIssue { identifier: string; title: string; url: string }
 
 export async function createLinearIssue(

@@ -4,7 +4,7 @@ import { listBranches } from "@/lib/db/branches";
 import { listTursoTargets, getConnectionSecret, type TursoTarget } from "@/lib/db/connections";
 import { introspectTurso } from "@/lib/turso-introspect";
 import { queryTurso } from "@/lib/turso-query";
-import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue } from "@/lib/linear";
+import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue, listLinearWorkflowStates, getLinearIssueByIdentifier, updateLinearIssue } from "@/lib/linear";
 import { buildArtifact, type ArtifactFormat } from "./artifacts";
 
 /** Contexto de execução de uma ferramenta — a branch ativa pode ser vazia (home). */
@@ -126,6 +126,24 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
           projeto: { type: "string", description: "Nome do projeto dentro do time. Opcional, mas pergunte se o time tiver projetos." },
         },
         required: ["titulo", "time"],
+      },
+    },
+    {
+      name: "atualizar_card_linear",
+      description:
+        "Atualiza um card (issue) existente no Linear — muda o status, título ou descrição. " +
+        "Use o identificador do card (ex: 'ART-29'). Se o usuário não informar o status exato, " +
+        "liste os status disponíveis com listar_linear e pergunte com perguntar_opcoes.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          identificador: { type: "string", description: "Identificador do card, ex: 'ART-29'." },
+          status: { type: "string", description: "Novo status (nome exato do workflow state, ex: 'Done', 'In Progress'). Opcional." },
+          titulo: { type: "string", description: "Novo título do card. Opcional." },
+          descricao: { type: "string", description: "Nova descrição em markdown. Opcional." },
+        },
+        required: ["identificador"],
       },
     },
     {
@@ -350,6 +368,50 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
           projectId,
         });
         return { ok: true, card: { id: issue.identifier, titulo: issue.title, url: issue.url }, time: team.name, projeto: projectName };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "atualizar_card_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const identificador = String(input.identificador ?? "").trim();
+      if (!identificador) return { ok: false, error: "Identificador do card (ex: 'ART-29') é obrigatório." };
+      try {
+        const issue = await getLinearIssueByIdentifier(key, identificador);
+        if (!issue) return { ok: false, error: `Card '${identificador}' não encontrado no Linear.` };
+
+        const update: { stateId?: string; title?: string; description?: string } = {};
+        let statusName: string | null = null;
+
+        if (input.status) {
+          const states = await listLinearWorkflowStates(key, issue.team.id);
+          const wanted = String(input.status).trim().toLowerCase();
+          const state =
+            states.find((s) => s.name.toLowerCase() === wanted) ??
+            states.find((s) => s.name.toLowerCase().includes(wanted));
+          if (!state) {
+            return {
+              ok: false,
+              error: `ASK_STATUS: status '${String(input.status)}' não encontrado no time ${issue.team.name}. Pergunte qual com perguntar_opcoes.`,
+              status_disponiveis: states.map((s) => s.name),
+            };
+          }
+          update.stateId = state.id;
+          statusName = state.name;
+        }
+        if (input.titulo) update.title = String(input.titulo);
+        if (input.descricao) update.description = String(input.descricao);
+
+        if (Object.keys(update).length === 0) {
+          return { ok: false, error: "Nada para atualizar — informe status, titulo ou descricao." };
+        }
+
+        const updated = await updateLinearIssue(key, issue.id, update);
+        return { ok: true, card: { id: updated.identifier, titulo: updated.title, url: updated.url }, novo_status: statusName };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
