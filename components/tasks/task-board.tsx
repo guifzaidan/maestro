@@ -303,7 +303,7 @@ export function TaskBoard() {
       <AnimatePresence mode="wait">
         {!loading && view === "hoje" && (
           <motion.div key="hoje" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
-            <HojeView tasks={visible.filter((t) => t.due === fmtDate(new Date()))} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
+            <HojeView tasks={visible.filter(belongsToToday)} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
           </motion.div>
         )}
         {!loading && view === "semana" && (
@@ -444,6 +444,32 @@ const DOW_TO_LIST: Record<number, TaskList> = { 0: "dom", 1: "seg", 2: "ter", 3:
 /** Formata uma data como dd/mm/yyyy (mesmo formato do DatePicker). */
 const fmtDate = (d: Date) =>
   `${String(d.getDate()).padStart(2, "0")}/${String(d.getMonth() + 1).padStart(2, "0")}/${d.getFullYear()}`;
+
+/** Converte "dd/mm/aaaa" → epoch (ms) à meia-noite local; NaN se inválida. */
+function parseDueMs(s: string | undefined): number {
+  if (!s) return NaN;
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(s.trim());
+  if (!m) return NaN;
+  return new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1])).getTime();
+}
+
+/** Meia-noite de hoje (epoch ms). */
+function todayMs(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+/**
+ * Aparece na aba "Hoje": vence hoje, OU está atrasada (data no passado) e ainda
+ * não foi concluída — pra não sumir de vista. Concluídas do passado não voltam.
+ */
+function belongsToToday(t: { due?: string; done: boolean }): boolean {
+  const due = parseDueMs(t.due);
+  if (Number.isNaN(due)) return false;
+  const today = todayMs();
+  return due === today || (due < today && !t.done);
+}
 
 /** Data do dia da semana (seg..dom) na semana corrente — semana começa na segunda. */
 function dateForList(list: TaskList): Date {

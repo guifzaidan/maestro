@@ -1,6 +1,6 @@
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, ensureSchema } from "./index";
-import { recurringTasks, type RecurringTask } from "./schema";
+import { recurringTasks, tasks, type RecurringTask } from "./schema";
 import { createTask } from "./tasks";
 
 export type Frequency = "daily" | "weekly" | "monthly";
@@ -114,28 +114,52 @@ function isDueToday(r: RecurringDTO, t: ReturnType<typeof todayInfo>): boolean {
 }
 
 /**
- * Gera as tasks das recorrentes que vencem hoje e ainda não foram geradas hoje.
- * Idempotente: usa lastGenerated para não duplicar. Retorna quantas criou.
+ * Gera as tasks das recorrentes que vencem hoje. Regras anti-duplicação:
+ *  - `lastGenerated`: não gera duas vezes no mesmo dia.
+ *  - **uma instância pendente por vez**: se ainda há uma task pendente desta
+ *    recorrente (de um dia anterior não concluído), NÃO cria outra — a antiga
+ *    rola pra frente (aparece como atrasada). Evita acúmulo de cópias.
+ * Idempotente e seguro contra chamadas concorrentes (mutex em processo).
  */
-export async function generateDueTasks(): Promise<number> {
-  await ensureSchema();
-  const all = (await db.select().from(recurringTasks)).map(toDTO);
-  const t = todayInfo();
-  let created = 0;
+let inflight: Promise<number> | null = null;
 
-  for (const r of all) {
-    if (!isDueToday(r, t)) continue;
-    if (r.lastGenerated === t.dd) continue; // já gerou hoje
-    await createTask({
-      title: r.title,
-      branch: r.branch,
-      due: t.dd,
-      list: t.weekday,
-      instruction: r.instruction ?? null,
-      sourceRecurring: r.id,
-    });
-    await db.update(recurringTasks).set({ lastGenerated: t.dd }).where(eq(recurringTasks.id, r.id));
-    created++;
+export async function generateDueTasks(): Promise<number> {
+  // Dedup de chamadas concorrentes (ex: StrictMode/eventos disparam 2x).
+  if (inflight) return inflight;
+  inflight = (async () => {
+    await ensureSchema();
+    const all = (await db.select().from(recurringTasks)).map(toDTO);
+    const t = todayInfo();
+    let created = 0;
+
+    for (const r of all) {
+      if (!isDueToday(r, t)) continue;
+      if (r.lastGenerated === t.dd) continue; // já gerou hoje
+
+      // Não acumula: havendo uma instância pendente, deixa ela rolar pra frente.
+      const pending = await db
+        .select({ id: tasks.id })
+        .from(tasks)
+        .where(and(eq(tasks.sourceRecurring, r.id), eq(tasks.done, false)))
+        .limit(1);
+      if (pending.length > 0) continue;
+
+      await createTask({
+        title: r.title,
+        branch: r.branch,
+        due: t.dd,
+        list: t.weekday,
+        instruction: r.instruction ?? null,
+        sourceRecurring: r.id,
+      });
+      await db.update(recurringTasks).set({ lastGenerated: t.dd }).where(eq(recurringTasks.id, r.id));
+      created++;
+    }
+    return created;
+  })();
+  try {
+    return await inflight;
+  } finally {
+    inflight = null;
   }
-  return created;
 }
