@@ -21,10 +21,10 @@ const BEAMS = [
 ];
 
 /** Casca de posicionamento compartilhada entre as variantes.
- *  O +2rem na altura cobre exatamente o `pb-8` do <main> abaixo do hero —
- *  sem isso sobra uma faixa preta no rodapé ao rolar até o fim. */
+ *  `fixed inset-0` cobre a viewport inteira em todas as páginas (atrás do
+ *  conteúdo, que fica em z-10), sem deixar faixa preta no rodapé. */
 const WRAPPER =
-  "pointer-events-none absolute left-1/2 top-[-180px] -z-10 h-[calc(100%+180px+2rem)] w-screen -translate-x-1/2 overflow-hidden";
+  "pointer-events-none fixed inset-0 z-0 overflow-hidden";
 
 /* ── Aurora + feixes (fundo original) ──────────────────────────── */
 function AuroraBeams({ isMobile, activeWs }: { isMobile: boolean; activeWs: ActiveWs }) {

@@ -9,11 +9,6 @@ import { CONNECTORS } from "@/lib/mock/integrations";
 import { cn } from "@/lib/utils";
 import { streamAgent, toolLabel, describeTool, groupLabel, friendlyAgentError, type AgentMessage, type AgentAttachment } from "@/lib/agent/client";
 import { DatePicker } from "@/components/ui/date-picker";
-import { useIsMobile } from "@/lib/use-is-mobile";
-import { HeroBackground, type HeroBackgroundVariant } from "@/components/hub/backgrounds/hero-background";
-
-/** Fundo da tela principal. Troque aqui, ou em runtime via ?bg=aurora|colorbends|colorbends3. */
-const DEFAULT_HERO_BG: HeroBackgroundVariant = "colorbends3";
 
 interface ChatMessage { id: string; role: "user" | "assistant" | "log" | "artifact" | "choice" | "progress"; content: string; artifact?: ArtifactData; options?: string[]; attachments?: AgentAttachment[]; progressDone?: number; progressTotal?: number; }
 interface MindNode   { id: string; label: string; value: string; type: "branch" | "tools" | "deadline" | "text"; }
@@ -336,15 +331,6 @@ type InputMode = "text" | "audio";
 
 export function HubView() {
   const { active, setActive, branches, activeWorkspace: activeWs } = useWorkspace();
-  const isMobile = useIsMobile();
-  // Fundo da hero: ?bg=aurora|colorbends sobrescreve o padrão (pra testar ao vivo).
-  // Inicia no default (estável no SSR) e só aplica a query após montar — senão
-  // o HTML do servidor diverge do cliente e dá erro de hidratação.
-  const [bgVariant, setBgVariant] = useState<HeroBackgroundVariant>(DEFAULT_HERO_BG);
-  useEffect(() => {
-    const q = new URLSearchParams(window.location.search).get("bg");
-    if (q === "aurora" || q === "colorbends" || q === "colorbends3") setBgVariant(q);
-  }, []);
   const [phase, setPhase] = useState<Phase>("idle");
   const [mode, setMode] = useState<InputMode>("text");
   const [selected, setSelected] = useState<string | null>(null);
@@ -984,9 +970,8 @@ export function HubView() {
     <PageTransition>
       <div className="relative flex min-h-[calc(100vh-72px)] flex-col items-center justify-center pb-16 pt-6">
 
-        {/* Fundo da hero — variante trocável (aurora original ou ColorBends WebGL).
-            Mobile usa a versão leve da aurora; ColorBends roda só no desktop. */}
-        <HeroBackground variant={isMobile ? "aurora" : bgVariant} isMobile={isMobile} activeWs={activeWs} />
+        {/* O fundo agora é global (GlobalBackground no AppShell), aparece em todas
+            as páginas — a home não tem mais fundo próprio. */}
 
         {/* Hero — colapsa quando a conversa começa, liberando espaço vertical */}
         <AnimatePresence initial={false}>
