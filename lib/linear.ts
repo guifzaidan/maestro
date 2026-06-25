@@ -77,7 +77,7 @@ export interface LinearWorkflowState { id: string; name: string; type: string }
 export async function listLinearWorkflowStates(apiKey: string, teamId: string): Promise<LinearWorkflowState[]> {
   const d = await linearGraphQL<{ workflowStates: { nodes: LinearWorkflowState[] } }>(
     apiKey,
-    `query($teamId: String!) {
+    `query($teamId: ID!) {
       workflowStates(filter: { team: { id: { eq: $teamId } } }, first: 50) {
         nodes { id name type }
       }
@@ -91,6 +91,13 @@ export async function getLinearIssueByIdentifier(
   apiKey: string,
   identifier: string,
 ): Promise<{ id: string; identifier: string; title: string; team: { id: string; name: string } } | null> {
+  // O `identifier` (ex: "ART-29") é um campo computado e NÃO existe no IssueFilter.
+  // Quebramos em chave do time ("ART") + número (29) e filtramos por ambos.
+  const m = /^([A-Za-z][A-Za-z0-9]*)-(\d+)$/.exec(identifier.trim());
+  if (!m) return null;
+  const teamKey = m[1].toUpperCase();
+  const number = Number(m[2]);
+
   const d = await linearGraphQL<{
     issues: { nodes: Array<{ id: string; identifier: string; title: string; team: { id: string; name: string } }> };
   }>(
@@ -100,7 +107,7 @@ export async function getLinearIssueByIdentifier(
         nodes { id identifier title team { id name } }
       }
     }`,
-    { filter: { identifier: { eq: identifier.toUpperCase() } } },
+    { filter: { team: { key: { eq: teamKey } }, number: { eq: number } } },
   );
   return d.issues.nodes[0] ?? null;
 }
