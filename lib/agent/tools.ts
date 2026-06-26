@@ -101,13 +101,15 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
       description:
         "Lista times, projetos e issues recentes do Linear conectado à branch. Filtros opcionais: 'time' (nome/key) e 'projeto' (nome). " +
         "Sem filtro, traz a visão geral (todos os times + issues recentes). Passe 'time' pra ver os projetos daquele time. " +
-        "Use pra descobrir time/projeto antes de criar um card.",
+        "Use pra descobrir time/projeto antes de criar um card. Cada issue já vem com a descrição. " +
+        "Para relatórios mais completos, passe incluir_comentarios=true pra trazer também os comentários (Activity) de cada issue — ex: as observações do dev.",
       input_schema: {
         type: "object",
         properties: {
           branch: { type: "string", description: BRANCH_DESC },
           time: { type: "string", description: "Filtra por time (nome ou key). Opcional." },
           projeto: { type: "string", description: "Filtra por projeto (nome). Requer 'time' pra resolver corretamente. Opcional." },
+          incluir_comentarios: { type: "boolean", description: "Se true, traz os comentários (Activity) de cada issue. Use em relatórios completos. Padrão false." },
         },
       },
     },
@@ -327,6 +329,7 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
           limit: 25,
           teamKey: matched?.key,
           projectId: proj?.id,
+          withComments: input.incluir_comentarios === true,
         });
 
         return {
@@ -335,7 +338,16 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
           projeto_filtrado: proj?.name ?? null,
           teams: teams.map((t) => ({ nome: t.name, key: t.key })),
           projetos: projects.map((p) => ({ nome: p.name, estado: p.state ?? null })),
-          issues: issues.map((i) => ({ id: i.identifier, titulo: i.title, estado: i.state?.name, time: i.team?.name, projeto: i.project?.name ?? null, responsavel: i.assignee?.name ?? null, url: i.url })),
+          issues: issues.map((i) => ({
+            id: i.identifier, titulo: i.title, descricao: i.description ?? null,
+            estado: i.state?.name, time: i.team?.name, projeto: i.project?.name ?? null,
+            responsavel: i.assignee?.name ?? null, url: i.url,
+            comentarios: i.comments?.nodes.map((c) => ({
+              autor: c.user?.displayName || c.user?.name || c.user?.email || "?",
+              quando: c.createdAt,
+              texto: c.body,
+            })),
+          })),
         };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };

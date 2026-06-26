@@ -21,7 +21,8 @@ async function linearGraphQL<T>(apiKey: string, query: string, variables?: Recor
 
 export interface LinearTeam { id: string; name: string; key: string }
 export interface LinearProject { id: string; name: string; state?: string }
-export interface LinearIssue { identifier: string; title: string; state?: { name: string }; team?: { name: string }; project?: { name: string } | null; assignee?: { name: string } | null; url: string }
+export interface LinearComment { body: string; createdAt: string; user?: { displayName?: string; name?: string; email?: string } | null }
+export interface LinearIssue { identifier: string; title: string; description?: string | null; state?: { name: string }; team?: { name: string }; project?: { name: string } | null; assignee?: { name: string } | null; url: string; comments?: { nodes: LinearComment[] } }
 
 export async function listLinearTeams(apiKey: string): Promise<LinearTeam[]> {
   const d = await linearGraphQL<{ teams: { nodes: LinearTeam[] } }>(
@@ -54,17 +55,21 @@ export async function listLinearProjects(apiKey: string, teamId?: string): Promi
 }
 
 /** Filtros opcionais para listar issues. */
-export interface IssueFilter { limit?: number; teamKey?: string; projectId?: string }
+export interface IssueFilter { limit?: number; teamKey?: string; projectId?: string; withComments?: boolean }
 
 export async function listLinearIssues(apiKey: string, filter: IssueFilter = {}): Promise<LinearIssue[]> {
   const f: Record<string, unknown> = {};
   if (filter.teamKey) f.team = { key: { eq: filter.teamKey } };
   if (filter.projectId) f.project = { id: { eq: filter.projectId } };
+  // Comentários (Activity) — só quando pedido, pra não pesar a listagem normal.
+  const commentsFrag = filter.withComments
+    ? `comments(first: 30) { nodes { body createdAt user { displayName name email } } }`
+    : "";
   const d = await linearGraphQL<{ issues: { nodes: LinearIssue[] } }>(
     apiKey,
     `query($n: Int!, $filter: IssueFilter) {
       issues(first: $n, orderBy: updatedAt, filter: $filter) {
-        nodes { identifier title url state { name } team { name } project { name } assignee { name } }
+        nodes { identifier title description url state { name } team { name } project { name } assignee { name } ${commentsFrag} }
       }
     }`,
     { n: filter.limit ?? 25, filter: Object.keys(f).length ? f : undefined },
