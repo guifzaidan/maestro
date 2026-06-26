@@ -7,8 +7,8 @@ import { useIsMobile } from "@/lib/use-is-mobile";
 /**
  * Navegação por swipe horizontal — só no mobile.
  * Ordem das páginas: Home → Tarefas → Configurações.
- *   - arrastar pra DIREITA  → próxima página (avança na ordem)
- *   - arrastar pra ESQUERDA → página anterior
+ *   - arrastar pra ESQUERDA → próxima página (avança na ordem)
+ *   - arrastar pra DIREITA  → página anterior
  * Nas pontas (Home à esquerda, Configurações à direita) não faz nada.
  */
 const PAGES = ["/", "/tasks", "/settings"];
@@ -43,7 +43,7 @@ export function MobileSwipeNav() {
       if (Math.abs(dx) < MIN_DX || Math.abs(dx) < Math.abs(dy) * H_OVER_V) return;
       const i = PAGES.indexOf(pathname);
       if (i === -1) return;
-      const next = dx > 0 ? i + 1 : i - 1; // direita = próxima; esquerda = anterior
+      const next = dx < 0 ? i + 1 : i - 1; // arrastar pra esquerda = próxima; direita = anterior
       if (next < 0 || next >= PAGES.length) return;
       router.push(PAGES[next]);
     };
