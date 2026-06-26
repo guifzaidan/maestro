@@ -87,6 +87,17 @@ export async function listLinearWorkflowStates(apiKey: string, teamId: string): 
   return d.workflowStates.nodes;
 }
 
+export interface LinearUser { id: string; name: string; displayName: string; email: string; active: boolean }
+
+/** Lista os membros do workspace do Linear (para atribuir como responsável). */
+export async function listLinearUsers(apiKey: string): Promise<LinearUser[]> {
+  const d = await linearGraphQL<{ users: { nodes: LinearUser[] } }>(
+    apiKey,
+    `query { users(first: 100) { nodes { id name displayName email active } } }`,
+  );
+  return d.users.nodes.filter((u) => u.active);
+}
+
 export async function getLinearIssueByIdentifier(
   apiKey: string,
   identifier: string,
@@ -115,7 +126,7 @@ export async function getLinearIssueByIdentifier(
 export async function updateLinearIssue(
   apiKey: string,
   issueId: string,
-  input: { stateId?: string; title?: string; description?: string },
+  input: { stateId?: string; title?: string; description?: string; assigneeId?: string; dueDate?: string | null },
 ): Promise<{ identifier: string; title: string; url: string }> {
   const d = await linearGraphQL<{ issueUpdate: { success: boolean; issue: { identifier: string; title: string; url: string } } }>(
     apiKey,

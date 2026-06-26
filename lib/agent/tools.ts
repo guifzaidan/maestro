@@ -4,7 +4,7 @@ import { listBranches } from "@/lib/db/branches";
 import { listTursoTargets, getConnectionSecret, type TursoTarget } from "@/lib/db/connections";
 import { introspectTurso } from "@/lib/turso-introspect";
 import { queryTurso } from "@/lib/turso-query";
-import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue, listLinearWorkflowStates, getLinearIssueByIdentifier, updateLinearIssue, deleteLinearIssue } from "@/lib/linear";
+import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue, listLinearWorkflowStates, getLinearIssueByIdentifier, updateLinearIssue, deleteLinearIssue, listLinearUsers } from "@/lib/linear";
 import { buildArtifact, type ArtifactFormat } from "./artifacts";
 
 /** Contexto de execução de uma ferramenta — a branch ativa pode ser vazia (home). */
@@ -131,9 +131,10 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
     {
       name: "atualizar_card_linear",
       description:
-        "Atualiza um card (issue) existente no Linear — muda o status, título ou descrição. " +
+        "Atualiza um card (issue) existente no Linear — muda o status, título, descrição ou o responsável (assignee). " +
         "Use o identificador do card (ex: 'ART-29'). Se o usuário não informar o status exato, " +
-        "liste os status disponíveis com listar_linear e pergunte com perguntar_opcoes.",
+        "liste os status disponíveis com listar_linear e pergunte com perguntar_opcoes. " +
+        "Para atribuir um membro, passe 'responsavel' com o nome/email; se não bater, a ferramenta devolve a lista de membros pra você confirmar.",
       input_schema: {
         type: "object",
         properties: {
@@ -142,6 +143,8 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
           status: { type: "string", description: "Novo status (nome exato do workflow state, ex: 'Done', 'In Progress'). Opcional." },
           titulo: { type: "string", description: "Novo título do card. Opcional." },
           descricao: { type: "string", description: "Nova descrição em markdown. Opcional." },
+          responsavel: { type: "string", description: "Nome, displayName ou email do membro a atribuir como responsável. Opcional." },
+          data: { type: "string", description: "Prazo (due date) do card. Aceita 'dd/mm/aaaa' ou 'aaaa-mm-dd'. Use 'remover' para limpar o prazo. Opcional." },
         },
         required: ["identificador"],
       },
@@ -398,8 +401,30 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
         const issue = await getLinearIssueByIdentifier(key, identificador);
         if (!issue) return { ok: false, error: `Card '${identificador}' não encontrado no Linear.` };
 
-        const update: { stateId?: string; title?: string; description?: string } = {};
+        const update: { stateId?: string; title?: string; description?: string; assigneeId?: string; dueDate?: string | null } = {};
         let statusName: string | null = null;
+        let assigneeName: string | null = null;
+        let dueLabel: string | null = null;
+
+        if (input.data !== undefined && input.data !== null && String(input.data).trim() !== "") {
+          const raw = String(input.data).trim().toLowerCase();
+          if (["remover", "limpar", "nenhuma", "none", "null", "-"].includes(raw)) {
+            update.dueDate = null;
+            dueLabel = "sem prazo";
+          } else {
+            // Aceita dd/mm/aaaa ou aaaa-mm-dd → normaliza para aaaa-mm-dd (TimelessDate do Linear).
+            let iso: string | null = null;
+            const br = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(raw);
+            const isoM = /^(\d{4})-(\d{2})-(\d{2})$/.exec(raw);
+            if (br) iso = `${br[3]}-${br[2]}-${br[1]}`;
+            else if (isoM) iso = `${isoM[1]}-${isoM[2]}-${isoM[3]}`;
+            if (!iso) {
+              return { ok: false, error: `Data '${String(input.data)}' inválida. Use 'dd/mm/aaaa', 'aaaa-mm-dd' ou 'remover'.` };
+            }
+            update.dueDate = iso;
+            dueLabel = iso;
+          }
+        }
 
         if (input.status) {
           const states = await listLinearWorkflowStates(key, issue.team.id);
@@ -417,15 +442,34 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
           update.stateId = state.id;
           statusName = state.name;
         }
+
+        if (input.responsavel) {
+          const users = await listLinearUsers(key);
+          const wanted = String(input.responsavel).trim().toLowerCase();
+          const norm = (s: string) => s.toLowerCase();
+          const user =
+            users.find((u) => norm(u.email) === wanted || norm(u.name) === wanted || norm(u.displayName) === wanted) ??
+            users.find((u) => norm(u.name).includes(wanted) || norm(u.displayName).includes(wanted) || norm(u.email).includes(wanted));
+          if (!user) {
+            return {
+              ok: false,
+              error: `ASK_RESPONSAVEL: membro '${String(input.responsavel)}' não encontrado no workspace. Pergunte qual com perguntar_opcoes.`,
+              membros_disponiveis: users.map((u) => u.displayName || u.name),
+            };
+          }
+          update.assigneeId = user.id;
+          assigneeName = user.displayName || user.name;
+        }
+
         if (input.titulo) update.title = String(input.titulo);
         if (input.descricao) update.description = String(input.descricao);
 
         if (Object.keys(update).length === 0) {
-          return { ok: false, error: "Nada para atualizar — informe status, titulo ou descricao." };
+          return { ok: false, error: "Nada para atualizar — informe status, responsavel, data, titulo ou descricao." };
         }
 
         const updated = await updateLinearIssue(key, issue.id, update);
-        return { ok: true, card: { id: updated.identifier, titulo: updated.title, url: updated.url }, novo_status: statusName };
+        return { ok: true, card: { id: updated.identifier, titulo: updated.title, url: updated.url }, novo_status: statusName, responsavel: assigneeName, prazo: dueLabel };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }

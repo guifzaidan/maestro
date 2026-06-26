@@ -147,6 +147,8 @@ export function describeTool(name: string, input: unknown): string {
     case "atualizar_card_linear": {
       const id = i.identificador ? String(i.identificador) : "card";
       if (i.status) return `Movendo ${id} para ${short(i.status, 20)}`;
+      if (i.responsavel) return `Atribuindo ${id} a ${short(i.responsavel, 20)}`;
+      if (i.data) return `Ajustando prazo de ${id}`;
       return `Atualizando ${id} no Linear`;
     }
     case "excluir_card_linear": {
