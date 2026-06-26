@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { createPortal } from "react-dom";
 import { DatePicker } from "@/components/ui/date-picker";
 import { fetchRecurring, saveRecurring, removeRecurring, generateRecurring, type RecurringDTO, type Frequency } from "@/lib/recurring-client";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
@@ -137,6 +138,17 @@ export function TaskBoard() {
     window.addEventListener("maestro:tasks-changed", onChanged);
     return () => window.removeEventListener("maestro:tasks-changed", onChanged);
   }, [loadTasks]);
+
+  // Atualização otimista in-place (ex: trocar a branch pelo chip da task).
+  useEffect(() => {
+    const onUpdated = (e: Event) => {
+      const { id, patch } = (e as CustomEvent<{ id: string; patch: Partial<Task> }>).detail ?? {};
+      if (!id || !patch) return;
+      setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    };
+    window.addEventListener("maestro:task-updated", onUpdated as EventListener);
+    return () => window.removeEventListener("maestro:task-updated", onUpdated as EventListener);
+  }, []);
 
   const toggle = (id: string) => {
     // Calcula 'next' de forma determinística a partir do estado atual —
@@ -1307,6 +1319,110 @@ function ConfirmDeleteModal({ title, onConfirm, onCancel }: {
   );
 }
 
+/* ── Chip de branch clicável (na visão "todas") — troca a branch da task ──
+   O menu vai num portal com posição `fixed`: as linhas de task usam transform
+   (framer), o que cria stacking contexts — sem o portal, o dropdown fica atrás
+   das linhas seguintes. */
+function BranchChip({ task }: { task: Task }) {
+  const { branches } = useWorkspace();
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const ws = getWorkspace(task.branch);
+
+  // Fecha ao clicar fora ou rolar (menu fixo não acompanha o scroll).
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (btnRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    const onScroll = () => setOpen(false);
+    document.addEventListener("mousedown", onDown);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [open]);
+
+  const toggle = () => {
+    if (!open) {
+      const r = btnRef.current?.getBoundingClientRect();
+      if (r) setCoords({ top: r.bottom + 6, left: r.right });
+    }
+    setOpen((o) => !o);
+  };
+
+  const pick = (branchId: string) => {
+    setOpen(false);
+    if (branchId === task.branch) return;
+    // Otimista: o board aplica a troca na hora; depois persiste no banco.
+    window.dispatchEvent(new CustomEvent("maestro:task-updated", { detail: { id: task.id, patch: { branch: branchId } } }));
+    fetch("/api/tasks", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id: task.id, branch: branchId }),
+    }).catch(() => {});
+    toast("Branch alterada", "edit");
+  };
+
+  return (
+    <div className="shrink-0" onClick={(e) => e.stopPropagation()}>
+      <button
+        ref={btnRef}
+        onClick={toggle}
+        className="flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium transition-[filter] hover:brightness-125"
+        style={{ background: `${ws.accent}1f`, color: ws.accent }}
+      >
+        <span className="h-1.5 w-1.5 rounded-full" style={{ background: ws.accent }} />
+        {ws.name}
+        <Icon name="ChevronDown" size={10} strokeWidth={2.25} className="-mr-0.5 opacity-70" />
+      </button>
+
+      {open && coords && createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-[200]"
+          style={{ top: coords.top, left: coords.left, transform: "translateX(-100%)" }}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <motion.div
+            initial={{ opacity: 0, y: -4, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            transition={{ duration: 0.14 }}
+            className="min-w-[170px] rounded-xl p-1.5"
+            style={{ background: "rgba(20,20,22,0.98)", border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 18px 50px -16px rgba(0,0,0,0.85)" }}
+          >
+            {branches.map((b) => {
+              const on = b.id === task.branch;
+              return (
+                <button
+                  key={b.id}
+                  onClick={() => pick(b.id)}
+                  className={cn(
+                    "flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[12px] transition-colors",
+                    on ? "text-white" : "text-white/55 hover:text-white/85",
+                  )}
+                  style={{ background: on ? "rgba(255,255,255,0.07)" : "transparent" }}
+                >
+                  <WorkspaceDot accent={b.accent} accent2={b.accent2} icon={b.icon} />
+                  <span className="min-w-0 flex-1 truncate">{b.name}</span>
+                  {on && <Icon name="Check" size={12} style={{ color: b.accent }} />}
+                </button>
+              );
+            })}
+          </motion.div>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
   task: Task;
   onToggle: (id: string) => void;
@@ -1363,15 +1479,7 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         )}
       </span>
 
-      {showBranch && (
-        <span
-          className="flex shrink-0 items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-medium"
-          style={{ background: `${ws.accent}1f`, color: ws.accent }}
-        >
-          <span className="h-1.5 w-1.5 rounded-full" style={{ background: ws.accent }} />
-          {ws.name}
-        </span>
-      )}
+      {showBranch && <BranchChip task={task} />}
 
       <div className="hidden sm:flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
         {onDelete && (
