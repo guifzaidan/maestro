@@ -98,6 +98,14 @@ const TOOL_LABELS: Record<string, string> = {
   criar_card_linear: "Criando card no Linear",
   atualizar_card_linear: "Atualizando card no Linear",
   excluir_card_linear: "Excluindo card no Linear",
+  criar_status_linear: "Criando status no Linear",
+  editar_status_linear: "Editando status no Linear",
+  comentar_card_linear: "Comentando no Linear",
+  anexar_link_linear: "Anexando link no Linear",
+  editar_anexo_linear: "Editando anexo no Linear",
+  excluir_anexo_linear: "Removendo anexo no Linear",
+  criar_label_linear: "Criando label no Linear",
+  editar_label_linear: "Editando label no Linear",
   gerar_artefato: "Gerando arquivo",
 };
 
@@ -155,6 +163,24 @@ export function describeTool(name: string, input: unknown): string {
       const id = i.identificador ? String(i.identificador) : "card";
       return `Excluindo ${id} no Linear`;
     }
+    case "criar_status_linear":
+      return i.nome ? `Criando status “${short(i.nome, 24)}” no Linear` : "Criando status no Linear";
+    case "editar_status_linear":
+      return i.status_atual ? `Editando status “${short(i.status_atual, 24)}” no Linear` : "Editando status no Linear";
+    case "comentar_card_linear": {
+      const id = i.identificador ? String(i.identificador) : "card";
+      return Array.isArray(i.mencionar) && i.mencionar.length ? `Comentando em ${id} (marcando ${i.mencionar.length})` : `Comentando em ${id}`;
+    }
+    case "anexar_link_linear":
+      return i.identificador ? `Anexando link em ${String(i.identificador)}` : "Anexando link no Linear";
+    case "editar_anexo_linear":
+      return i.identificador ? `Editando anexo de ${String(i.identificador)}` : "Editando anexo no Linear";
+    case "excluir_anexo_linear":
+      return i.identificador ? `Removendo anexo de ${String(i.identificador)}` : "Removendo anexo no Linear";
+    case "criar_label_linear":
+      return i.nome ? `Criando label “${short(i.nome, 20)}” no Linear` : "Criando label no Linear";
+    case "editar_label_linear":
+      return i.label_atual ? `Editando label “${short(i.label_atual, 20)}” no Linear` : "Editando label no Linear";
     case "gerar_artefato": {
       const nome = i.nome ? String(i.nome) : "arquivo";
       const ext = i.formato ? `.${i.formato}` : "";

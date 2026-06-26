@@ -4,7 +4,7 @@ import { listBranches } from "@/lib/db/branches";
 import { listTursoTargets, getConnectionSecret, type TursoTarget } from "@/lib/db/connections";
 import { introspectTurso } from "@/lib/turso-introspect";
 import { queryTurso } from "@/lib/turso-query";
-import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue, listLinearWorkflowStates, getLinearIssueByIdentifier, updateLinearIssue, deleteLinearIssue, listLinearUsers } from "@/lib/linear";
+import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue, listLinearWorkflowStates, getLinearIssueByIdentifier, updateLinearIssue, deleteLinearIssue, listLinearUsers, createLinearWorkflowState, updateLinearWorkflowState, LINEAR_STATE_TYPES, type LinearStateType, createLinearComment, listLinearIssueAttachments, createLinearAttachment, updateLinearAttachment, deleteLinearAttachment, type LinearUser, listLinearLabels, createLinearLabel, updateLinearLabel, addLinearIssueLabel, removeLinearIssueLabel } from "@/lib/linear";
 import { buildArtifact, type ArtifactFormat } from "./artifacts";
 
 /** Contexto de execução de uma ferramenta — a branch ativa pode ser vazia (home). */
@@ -149,6 +149,9 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
           descricao: { type: "string", description: "Nova descrição em markdown. Opcional." },
           responsavel: { type: "string", description: "Nome, displayName ou email do membro a atribuir como responsável. Opcional." },
           data: { type: "string", description: "Prazo (due date) do card. Aceita 'dd/mm/aaaa' ou 'aaaa-mm-dd'. Use 'remover' para limpar o prazo. Opcional." },
+          urgencia: { type: "string", description: "Prioridade/urgência: 'urgente', 'alta', 'media', 'baixa' ou 'nenhuma' (remove). Opcional." },
+          labels: { type: "array", items: { type: "string" }, description: "Labels a ADICIONAR no card (nomes). Se não existir, a ferramenta devolve as disponíveis. Opcional." },
+          remover_labels: { type: "array", items: { type: "string" }, description: "Labels a REMOVER do card (nomes). Opcional." },
         },
         required: ["identificador"],
       },
@@ -165,6 +168,131 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
           identificador: { type: "string", description: "Identificador do card a excluir, ex: 'ART-29'." },
         },
         required: ["identificador"],
+      },
+    },
+    {
+      name: "criar_status_linear",
+      description:
+        "Adiciona um novo status (workflow state) à estrutura dos cards de um TIME do Linear — ex: criar 'Em Revisão'. " +
+        "Informe o time, o nome do status e o tipo. Se o time não for informado/único, liste com listar_linear e pergunte.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          time: { type: "string", description: "Nome ou key do time do Linear. Pergunte se não souber." },
+          nome: { type: "string", description: "Nome do novo status, ex: 'Em Revisão'." },
+          tipo: { type: "string", enum: [...LINEAR_STATE_TYPES], description: "Categoria do status: triage, backlog, unstarted (a fazer), started (em progresso), completed (concluído), canceled (cancelado)." },
+          cor: { type: "string", description: "Cor em hex, ex: '#f59e0b'. Opcional." },
+        },
+        required: ["time", "nome", "tipo"],
+      },
+    },
+    {
+      name: "editar_status_linear",
+      description:
+        "Edita um status (workflow state) existente de um TIME do Linear — renomear, mudar a cor ou o tipo. " +
+        "Identifique o status pelo nome atual dentro do time.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          time: { type: "string", description: "Nome ou key do time do Linear." },
+          status_atual: { type: "string", description: "Nome atual do status a editar, ex: 'Backlog'." },
+          novo_nome: { type: "string", description: "Novo nome do status. Opcional." },
+          cor: { type: "string", description: "Nova cor em hex. Opcional." },
+          tipo: { type: "string", enum: [...LINEAR_STATE_TYPES], description: "Novo tipo. Opcional." },
+        },
+        required: ["time", "status_atual"],
+      },
+    },
+    {
+      name: "comentar_card_linear",
+      description:
+        "Adiciona um comentário a um card do Linear. Pode marcar (@menção, que notifica) um ou mais membros — passe os nomes em 'mencionar'. " +
+        "Use o identificador do card (ex: 'ART-29').",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          identificador: { type: "string", description: "Identificador do card, ex: 'ART-29'." },
+          texto: { type: "string", description: "Texto do comentário (markdown)." },
+          mencionar: { type: "array", items: { type: "string" }, description: "Nomes/emails dos membros a marcar (@menção). Opcional." },
+        },
+        required: ["identificador", "texto"],
+      },
+    },
+    {
+      name: "anexar_link_linear",
+      description: "Anexa um link (URL + título) a um card do Linear — ex: PR, doc, Figma. Use o identificador do card.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          identificador: { type: "string", description: "Identificador do card, ex: 'ART-29'." },
+          titulo: { type: "string", description: "Título do anexo." },
+          url: { type: "string", description: "URL do link." },
+          subtitulo: { type: "string", description: "Subtítulo/descrição curta. Opcional." },
+        },
+        required: ["identificador", "titulo", "url"],
+      },
+    },
+    {
+      name: "editar_anexo_linear",
+      description: "Edita o título/subtítulo de um anexo existente de um card (identifique pelo título ou URL atual). A URL não é editável — pra trocar, exclua e crie de novo.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          identificador: { type: "string", description: "Identificador do card, ex: 'ART-29'." },
+          anexo: { type: "string", description: "Título ou URL atual do anexo a editar." },
+          novo_titulo: { type: "string", description: "Novo título. Opcional." },
+          novo_subtitulo: { type: "string", description: "Novo subtítulo. Opcional." },
+        },
+        required: ["identificador", "anexo"],
+      },
+    },
+    {
+      name: "excluir_anexo_linear",
+      description: "Remove um anexo de um card do Linear (identifique pelo título ou URL).",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          identificador: { type: "string", description: "Identificador do card, ex: 'ART-29'." },
+          anexo: { type: "string", description: "Título ou URL do anexo a remover." },
+        },
+        required: ["identificador", "anexo"],
+      },
+    },
+    {
+      name: "criar_label_linear",
+      description:
+        "Cria uma label no Linear. Com 'time' a label é do time; sem 'time', é do workspace (vale pra todos). " +
+        "Pra atribuir uma label a um card, use 'labels' no atualizar_card_linear.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          nome: { type: "string", description: "Nome da label, ex: 'bug', 'frontend'." },
+          cor: { type: "string", description: "Cor em hex, ex: '#ef4444'. Opcional." },
+          time: { type: "string", description: "Time do Linear pra escopar a label. Opcional (sem = workspace)." },
+        },
+        required: ["nome"],
+      },
+    },
+    {
+      name: "editar_label_linear",
+      description: "Edita uma label existente (renomear e/ou mudar a cor). Identifique pelo nome atual.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          label_atual: { type: "string", description: "Nome atual da label a editar." },
+          novo_nome: { type: "string", description: "Novo nome. Opcional." },
+          cor: { type: "string", description: "Nova cor em hex. Opcional." },
+          time: { type: "string", description: "Time pra desambiguar se houver labels de mesmo nome. Opcional." },
+        },
+        required: ["label_atual"],
       },
     },
     {
@@ -226,6 +354,31 @@ function matchProject<T extends { name: string }>(projects: T[], value: string):
     null
   );
 }
+
+/** Resolve um membro do Linear por nome/displayName/email (exato → parcial). */
+function matchLinearUser(users: LinearUser[], value: string): LinearUser | null {
+  const q = value.trim().toLowerCase();
+  if (!q) return null;
+  const n = (s: string) => (s ?? "").toLowerCase();
+  return (
+    users.find((u) => n(u.email) === q || n(u.name) === q || n(u.displayName) === q) ??
+    users.find((u) => n(u.name).includes(q) || n(u.displayName).includes(q) || n(u.email).includes(q)) ??
+    null
+  );
+}
+
+/** Converte uma urgência em PT (ou número) para a priority do Linear (0–4). null se inválida. */
+function parseLinearPriority(value: string): number | null {
+  const s = value.trim().toLowerCase();
+  if (["urgente", "urgent", "1"].includes(s)) return 1;
+  if (["alta", "high", "2"].includes(s)) return 2;
+  if (["media", "média", "normal", "medium", "3"].includes(s)) return 3;
+  if (["baixa", "low", "4"].includes(s)) return 4;
+  if (["nenhuma", "sem", "remover", "none", "0"].includes(s)) return 0;
+  return null;
+}
+
+const PRIORITY_LABEL: Record<number, string> = { 0: "Nenhuma", 1: "Urgente", 2: "Alta", 3: "Média", 4: "Baixa" };
 
 /** Resume um TursoTarget + tabelas para o agente (sem expor o token). */
 async function describeTarget(t: TursoTarget, includeSchema: boolean) {
@@ -327,6 +480,10 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
         const projects = await listLinearProjects(key, matched?.id);
         const proj = input.projeto ? matchProject(projects, String(input.projeto)) : null;
 
+        // Estrutura de status e labels do time filtrado (pra ver/editar).
+        const teamStates = matched ? await listLinearWorkflowStates(key, matched.id) : null;
+        const teamLabels = matched ? await listLinearLabels(key, matched.id) : null;
+
         const statusNames = Array.isArray(input.status)
           ? input.status.map((s) => String(s)).filter(Boolean)
           : input.status
@@ -353,6 +510,8 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
           // Bateu no teto → pode haver mais. Avise o usuário e ofereça refinar.
           truncado: issues.length >= LIMIT,
           teams: teams.map((t) => ({ nome: t.name, key: t.key })),
+          status_do_time: teamStates ? teamStates.map((s) => ({ nome: s.name, tipo: s.type })) : null,
+          labels_do_time: teamLabels ? teamLabels.map((l) => l.name) : null,
           projetos: projects.map((p) => ({ nome: p.name, estado: p.state ?? null })),
           issues: issues.map((i) => ({
             id: i.identifier, titulo: i.title, descricao: i.description ?? null,
@@ -429,10 +588,20 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
         const issue = await getLinearIssueByIdentifier(key, identificador);
         if (!issue) return { ok: false, error: `Card '${identificador}' não encontrado no Linear.` };
 
-        const update: { stateId?: string; title?: string; description?: string; assigneeId?: string; dueDate?: string | null } = {};
+        const update: { stateId?: string; title?: string; description?: string; assigneeId?: string; dueDate?: string | null; priority?: number } = {};
         let statusName: string | null = null;
         let assigneeName: string | null = null;
         let dueLabel: string | null = null;
+        let priorityLabel: string | null = null;
+
+        if (input.urgencia !== undefined && input.urgencia !== null && String(input.urgencia).trim() !== "") {
+          const p = parseLinearPriority(String(input.urgencia));
+          if (p === null) {
+            return { ok: false, error: "Urgência inválida. Use 'urgente', 'alta', 'media', 'baixa' ou 'nenhuma'." };
+          }
+          update.priority = p;
+          priorityLabel = PRIORITY_LABEL[p];
+        }
 
         if (input.data !== undefined && input.data !== null && String(input.data).trim() !== "") {
           const raw = String(input.data).trim().toLowerCase();
@@ -492,12 +661,50 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
         if (input.titulo) update.title = String(input.titulo);
         if (input.descricao) update.description = String(input.descricao);
 
-        if (Object.keys(update).length === 0) {
-          return { ok: false, error: "Nada para atualizar — informe status, responsavel, data, titulo ou descricao." };
+        // Labels: adicionar/remover (via mutations próprias, sem mexer nas demais).
+        const labelsToAdd = Array.isArray(input.labels) ? input.labels.map((l) => String(l)).filter(Boolean) : [];
+        const labelsToRemove = Array.isArray(input.remover_labels) ? input.remover_labels.map((l) => String(l)).filter(Boolean) : [];
+        const labelsAdicionadas: string[] = [];
+        const labelsRemovidas: string[] = [];
+        if (labelsToAdd.length || labelsToRemove.length) {
+          const labels = await listLinearLabels(key, issue.team.id);
+          const findLabel = (q: string) => {
+            const w = q.toLowerCase();
+            return labels.find((l) => l.name.toLowerCase() === w) ?? labels.find((l) => l.name.toLowerCase().includes(w));
+          };
+          for (const q of labelsToAdd) {
+            const l = findLabel(q);
+            if (!l) {
+              return {
+                ok: false,
+                error: `ASK_LABEL: label '${q}' não existe no time ${issue.team.name}. Crie com criar_label_linear ou confirme qual com perguntar_opcoes.`,
+                labels_disponiveis: labels.map((x) => x.name),
+              };
+            }
+            await addLinearIssueLabel(key, issue.id, l.id);
+            labelsAdicionadas.push(l.name);
+          }
+          for (const q of labelsToRemove) {
+            const l = findLabel(q);
+            if (l) { await removeLinearIssueLabel(key, issue.id, l.id); labelsRemovidas.push(l.name); }
+          }
         }
 
-        const updated = await updateLinearIssue(key, issue.id, update);
-        return { ok: true, card: { id: updated.identifier, titulo: updated.title, url: updated.url }, novo_status: statusName, responsavel: assigneeName, prazo: dueLabel };
+        const hasLabelOps = labelsAdicionadas.length > 0 || labelsRemovidas.length > 0;
+        if (Object.keys(update).length === 0 && !hasLabelOps) {
+          return { ok: false, error: "Nada para atualizar — informe status, responsavel, data, urgencia, labels, titulo ou descricao." };
+        }
+
+        const result = Object.keys(update).length > 0
+          ? await updateLinearIssue(key, issue.id, update)
+          : { identifier: issue.identifier, title: issue.title, url: undefined as string | undefined };
+        return {
+          ok: true,
+          card: { id: result.identifier, titulo: result.title, url: result.url },
+          novo_status: statusName, responsavel: assigneeName, prazo: dueLabel, urgencia: priorityLabel,
+          labels_adicionadas: labelsAdicionadas.length ? labelsAdicionadas : undefined,
+          labels_removidas: labelsRemovidas.length ? labelsRemovidas : undefined,
+        };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }
@@ -515,6 +722,231 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
         if (!issue) return { ok: false, error: `Card '${identificador}' não encontrado no Linear.` };
         await deleteLinearIssue(key, issue.id);
         return { ok: true, excluido: { id: issue.identifier, titulo: issue.title } };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "criar_status_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const nome = String(input.nome ?? "").trim();
+      if (!nome) return { ok: false, error: "Nome do status é obrigatório." };
+      const tipo = String(input.tipo ?? "").trim() as LinearStateType;
+      if (!LINEAR_STATE_TYPES.includes(tipo)) {
+        return { ok: false, error: `Tipo inválido. Use um de: ${LINEAR_STATE_TYPES.join(", ")}.` };
+      }
+      try {
+        const teams = await listLinearTeams(key);
+        const team = input.time ? matchTeam(teams, String(input.time)) : (teams.length === 1 ? teams[0] : null);
+        if (!team) {
+          return {
+            ok: false,
+            error: "ASK_TEAM: de qual time é o status? Pergunte com perguntar_opcoes.",
+            times_disponiveis: teams.map((t) => `${t.name} (${t.key})`),
+          };
+        }
+        const created = await createLinearWorkflowState(key, { teamId: team.id, name: nome, type: tipo, color: input.cor ? String(input.cor) : undefined });
+        return { ok: true, status_criado: { nome: created.name, tipo: created.type, cor: created.color }, time: team.name };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "editar_status_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const statusAtual = String(input.status_atual ?? "").trim();
+      if (!statusAtual) return { ok: false, error: "Informe o nome do status atual a editar." };
+      try {
+        const teams = await listLinearTeams(key);
+        const team = input.time ? matchTeam(teams, String(input.time)) : (teams.length === 1 ? teams[0] : null);
+        if (!team) {
+          return {
+            ok: false,
+            error: "ASK_TEAM: de qual time é o status? Pergunte com perguntar_opcoes.",
+            times_disponiveis: teams.map((t) => `${t.name} (${t.key})`),
+          };
+        }
+        const states = await listLinearWorkflowStates(key, team.id);
+        const wanted = statusAtual.toLowerCase();
+        const state = states.find((s) => s.name.toLowerCase() === wanted) ?? states.find((s) => s.name.toLowerCase().includes(wanted));
+        if (!state) {
+          return {
+            ok: false,
+            error: `Status '${statusAtual}' não encontrado no time ${team.name}.`,
+            status_disponiveis: states.map((s) => s.name),
+          };
+        }
+        const upd: { name?: string; color?: string; type?: LinearStateType } = {};
+        if (input.novo_nome) upd.name = String(input.novo_nome);
+        if (input.cor) upd.color = String(input.cor);
+        if (input.tipo) {
+          const t = String(input.tipo) as LinearStateType;
+          if (!LINEAR_STATE_TYPES.includes(t)) return { ok: false, error: `Tipo inválido. Use um de: ${LINEAR_STATE_TYPES.join(", ")}.` };
+          upd.type = t;
+        }
+        if (Object.keys(upd).length === 0) return { ok: false, error: "Nada para editar — informe novo_nome, cor ou tipo." };
+        const updated = await updateLinearWorkflowState(key, state.id, upd);
+        return { ok: true, status_editado: { de: state.name, para: updated.name, tipo: updated.type, cor: updated.color }, time: team.name };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "comentar_card_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const ident = String(input.identificador ?? "").trim();
+      const texto = String(input.texto ?? "").trim();
+      if (!ident || !texto) return { ok: false, error: "Identificador e texto do comentário são obrigatórios." };
+      try {
+        const issue = await getLinearIssueByIdentifier(key, ident);
+        if (!issue) return { ok: false, error: `Card '${ident}' não encontrado no Linear.` };
+
+        // Resolve menções → tokens @[displayName](userId) prefixados no corpo.
+        let mentionPrefix = "";
+        const mencionados: string[] = [];
+        const wanted = Array.isArray(input.mencionar) ? input.mencionar.map((m) => String(m)).filter(Boolean) : [];
+        if (wanted.length) {
+          const users = await listLinearUsers(key);
+          for (const w of wanted) {
+            const user = matchLinearUser(users, w);
+            if (!user) {
+              return {
+                ok: false,
+                error: `ASK_MENCAO: membro '${w}' não encontrado pra marcar. Pergunte qual com perguntar_opcoes.`,
+                membros_disponiveis: users.map((u) => u.displayName || u.name),
+              };
+            }
+            mentionPrefix += `@[${user.displayName || user.name}](${user.id}) `;
+            mencionados.push(user.displayName || user.name);
+          }
+        }
+
+        const body = mentionPrefix ? `${mentionPrefix}\n${texto}` : texto;
+        await createLinearComment(key, issue.id, body);
+        return { ok: true, comentario_em: issue.identifier, mencionados };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "anexar_link_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const ident = String(input.identificador ?? "").trim();
+      const titulo = String(input.titulo ?? "").trim();
+      const url = String(input.url ?? "").trim();
+      if (!ident || !titulo || !url) return { ok: false, error: "Identificador, titulo e url são obrigatórios." };
+      try {
+        const issue = await getLinearIssueByIdentifier(key, ident);
+        if (!issue) return { ok: false, error: `Card '${ident}' não encontrado no Linear.` };
+        const att = await createLinearAttachment(key, { issueId: issue.id, title: titulo, url, subtitle: input.subtitulo ? String(input.subtitulo) : undefined });
+        return { ok: true, anexo_criado: { titulo: att.title, url: att.url }, card: issue.identifier };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "editar_anexo_linear":
+    case "excluir_anexo_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const ident = String(input.identificador ?? "").trim();
+      const anexoQ = String(input.anexo ?? "").trim().toLowerCase();
+      if (!ident || !anexoQ) return { ok: false, error: "Identificador e o anexo (título/url) são obrigatórios." };
+      try {
+        const issue = await getLinearIssueByIdentifier(key, ident);
+        if (!issue) return { ok: false, error: `Card '${ident}' não encontrado no Linear.` };
+        const attachments = await listLinearIssueAttachments(key, issue.id);
+        const att =
+          attachments.find((a) => a.title.toLowerCase() === anexoQ || a.url.toLowerCase() === anexoQ) ??
+          attachments.find((a) => a.title.toLowerCase().includes(anexoQ) || a.url.toLowerCase().includes(anexoQ));
+        if (!att) {
+          return {
+            ok: false,
+            error: `Anexo '${String(input.anexo)}' não encontrado no card ${issue.identifier}.`,
+            anexos_disponiveis: attachments.map((a) => a.title),
+          };
+        }
+        if (name === "excluir_anexo_linear") {
+          await deleteLinearAttachment(key, att.id);
+          return { ok: true, anexo_excluido: att.title, card: issue.identifier };
+        }
+        const upd: { title?: string; subtitle?: string } = {};
+        if (input.novo_titulo) upd.title = String(input.novo_titulo);
+        if (input.novo_subtitulo) upd.subtitle = String(input.novo_subtitulo);
+        if (Object.keys(upd).length === 0) return { ok: false, error: "Nada para editar — informe novo_titulo ou novo_subtitulo." };
+        const updated = await updateLinearAttachment(key, att.id, upd);
+        return { ok: true, anexo_editado: { de: att.title, para: updated.title }, card: issue.identifier };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "criar_label_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const nome = String(input.nome ?? "").trim();
+      if (!nome) return { ok: false, error: "Nome da label é obrigatório." };
+      try {
+        let teamId: string | undefined;
+        let teamName: string | null = null;
+        if (input.time) {
+          const teams = await listLinearTeams(key);
+          const team = matchTeam(teams, String(input.time));
+          if (!team) {
+            return { ok: false, error: `Time '${String(input.time)}' não encontrado.`, times_disponiveis: teams.map((t) => `${t.name} (${t.key})`) };
+          }
+          teamId = team.id;
+          teamName = team.name;
+        }
+        const label = await createLinearLabel(key, { name: nome, color: input.cor ? String(input.cor) : undefined, teamId });
+        return { ok: true, label_criada: { nome: label.name, cor: label.color }, escopo: teamName ?? "workspace" };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "editar_label_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const labelAtual = String(input.label_atual ?? "").trim();
+      if (!labelAtual) return { ok: false, error: "Informe o nome atual da label." };
+      try {
+        let teamId: string | undefined;
+        if (input.time) {
+          const teams = await listLinearTeams(key);
+          const team = matchTeam(teams, String(input.time));
+          teamId = team?.id;
+        }
+        const labels = await listLinearLabels(key, teamId);
+        const w = labelAtual.toLowerCase();
+        const label = labels.find((l) => l.name.toLowerCase() === w) ?? labels.find((l) => l.name.toLowerCase().includes(w));
+        if (!label) {
+          return { ok: false, error: `Label '${labelAtual}' não encontrada.`, labels_disponiveis: labels.map((l) => l.name) };
+        }
+        const upd: { name?: string; color?: string } = {};
+        if (input.novo_nome) upd.name = String(input.novo_nome);
+        if (input.cor) upd.color = String(input.cor);
+        if (Object.keys(upd).length === 0) return { ok: false, error: "Nada para editar — informe novo_nome ou cor." };
+        const updated = await updateLinearLabel(key, label.id, upd);
+        return { ok: true, label_editada: { de: label.name, para: updated.name, cor: updated.color } };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }

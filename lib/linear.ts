@@ -94,6 +94,43 @@ export async function listLinearWorkflowStates(apiKey: string, teamId: string): 
   return d.workflowStates.nodes;
 }
 
+/** Tipos válidos de workflow state no Linear. */
+export const LINEAR_STATE_TYPES = ["triage", "backlog", "unstarted", "started", "completed", "canceled"] as const;
+export type LinearStateType = (typeof LINEAR_STATE_TYPES)[number];
+
+/** Cria um novo status (workflow state) num time do Linear. */
+export async function createLinearWorkflowState(
+  apiKey: string,
+  input: { teamId: string; name: string; type: LinearStateType; color?: string },
+): Promise<{ id: string; name: string; type: string; color: string }> {
+  const d = await linearGraphQL<{ workflowStateCreate: { success: boolean; workflowState: { id: string; name: string; type: string; color: string } } }>(
+    apiKey,
+    `mutation($input: WorkflowStateCreateInput!) {
+      workflowStateCreate(input: $input) { success workflowState { id name type color } }
+    }`,
+    { input: { teamId: input.teamId, name: input.name, type: input.type, color: input.color ?? "#6e7b8b" } },
+  );
+  if (!d.workflowStateCreate?.success) throw new Error("Linear recusou a criação do status.");
+  return d.workflowStateCreate.workflowState;
+}
+
+/** Edita um status existente (nome, cor e/ou tipo). */
+export async function updateLinearWorkflowState(
+  apiKey: string,
+  stateId: string,
+  input: { name?: string; color?: string; type?: LinearStateType },
+): Promise<{ id: string; name: string; type: string; color: string }> {
+  const d = await linearGraphQL<{ workflowStateUpdate: { success: boolean; workflowState: { id: string; name: string; type: string; color: string } } }>(
+    apiKey,
+    `mutation($id: String!, $input: WorkflowStateUpdateInput!) {
+      workflowStateUpdate(id: $id, input: $input) { success workflowState { id name type color } }
+    }`,
+    { id: stateId, input },
+  );
+  if (!d.workflowStateUpdate?.success) throw new Error("Linear recusou a edição do status.");
+  return d.workflowStateUpdate.workflowState;
+}
+
 export interface LinearUser { id: string; name: string; displayName: string; email: string; active: boolean }
 
 /** Lista os membros do workspace do Linear (para atribuir como responsável). */
@@ -133,7 +170,7 @@ export async function getLinearIssueByIdentifier(
 export async function updateLinearIssue(
   apiKey: string,
   issueId: string,
-  input: { stateId?: string; title?: string; description?: string; assigneeId?: string; dueDate?: string | null },
+  input: { stateId?: string; title?: string; description?: string; assigneeId?: string; dueDate?: string | null; priority?: number },
 ): Promise<{ identifier: string; title: string; url: string }> {
   const d = await linearGraphQL<{ issueUpdate: { success: boolean; issue: { identifier: string; title: string; url: string } } }>(
     apiKey,
@@ -157,6 +194,143 @@ export async function deleteLinearIssue(apiKey: string, issueId: string): Promis
     { id: issueId },
   );
   if (!d.issueDelete?.success) throw new Error("Linear recusou a exclusão do card.");
+}
+
+/**
+ * Cria um comentário num card. Para mencionar um usuário (notifica), inclua no
+ * `body` o token `@[displayName](userId)` — formato oficial do Linear.
+ */
+export async function createLinearComment(apiKey: string, issueId: string, body: string): Promise<{ id: string; url: string }> {
+  const d = await linearGraphQL<{ commentCreate: { success: boolean; comment: { id: string; url: string } } }>(
+    apiKey,
+    `mutation($input: CommentCreateInput!) {
+      commentCreate(input: $input) { success comment { id url } }
+    }`,
+    { input: { issueId, body } },
+  );
+  if (!d.commentCreate?.success) throw new Error("Linear recusou o comentário.");
+  return d.commentCreate.comment;
+}
+
+export interface LinearAttachment { id: string; title: string; subtitle: string | null; url: string }
+
+/** Anexos (links) de um card. */
+export async function listLinearIssueAttachments(apiKey: string, issueId: string): Promise<LinearAttachment[]> {
+  const d = await linearGraphQL<{ issue: { attachments: { nodes: LinearAttachment[] } } | null }>(
+    apiKey,
+    `query($id: String!) { issue(id: $id) { attachments(first: 50) { nodes { id title subtitle url } } } }`,
+    { id: issueId },
+  );
+  return d.issue?.attachments.nodes ?? [];
+}
+
+/** Cria um anexo de link (URL + título) num card. */
+export async function createLinearAttachment(
+  apiKey: string,
+  input: { issueId: string; title: string; url: string; subtitle?: string },
+): Promise<{ id: string; title: string; url: string }> {
+  const d = await linearGraphQL<{ attachmentCreate: { success: boolean; attachment: { id: string; title: string; url: string } } }>(
+    apiKey,
+    `mutation($input: AttachmentCreateInput!) {
+      attachmentCreate(input: $input) { success attachment { id title url } }
+    }`,
+    { input: { issueId: input.issueId, title: input.title, url: input.url, subtitle: input.subtitle } },
+  );
+  if (!d.attachmentCreate?.success) throw new Error("Linear recusou criar o anexo.");
+  return d.attachmentCreate.attachment;
+}
+
+/** Edita um anexo (título/subtítulo). O Linear não permite trocar a URL — recrie. */
+export async function updateLinearAttachment(
+  apiKey: string,
+  id: string,
+  input: { title?: string; subtitle?: string },
+): Promise<{ id: string; title: string }> {
+  const d = await linearGraphQL<{ attachmentUpdate: { success: boolean; attachment: { id: string; title: string } } }>(
+    apiKey,
+    `mutation($id: String!, $input: AttachmentUpdateInput!) {
+      attachmentUpdate(id: $id, input: $input) { success attachment { id title } }
+    }`,
+    { id, input },
+  );
+  if (!d.attachmentUpdate?.success) throw new Error("Linear recusou editar o anexo.");
+  return d.attachmentUpdate.attachment;
+}
+
+/** Exclui um anexo de um card. */
+export async function deleteLinearAttachment(apiKey: string, id: string): Promise<void> {
+  const d = await linearGraphQL<{ attachmentDelete: { success: boolean } }>(
+    apiKey,
+    `mutation($id: String!) { attachmentDelete(id: $id) { success } }`,
+    { id },
+  );
+  if (!d.attachmentDelete?.success) throw new Error("Linear recusou excluir o anexo.");
+}
+
+export interface LinearLabel { id: string; name: string; color: string; team?: { id: string } | null }
+
+/** Lista as labels do workspace. Se `teamId`, traz só as do time + as globais. */
+export async function listLinearLabels(apiKey: string, teamId?: string): Promise<LinearLabel[]> {
+  const d = await linearGraphQL<{ issueLabels: { nodes: LinearLabel[] } }>(
+    apiKey,
+    `query { issueLabels(first: 250) { nodes { id name color team { id } } } }`,
+  );
+  const all = d.issueLabels.nodes;
+  if (!teamId) return all;
+  return all.filter((l) => !l.team || l.team.id === teamId);
+}
+
+/** Cria uma label. Com `teamId` é do time; sem, é do workspace. */
+export async function createLinearLabel(
+  apiKey: string,
+  input: { name: string; color?: string; teamId?: string },
+): Promise<{ id: string; name: string; color: string }> {
+  const d = await linearGraphQL<{ issueLabelCreate: { success: boolean; issueLabel: { id: string; name: string; color: string } } }>(
+    apiKey,
+    `mutation($input: IssueLabelCreateInput!) {
+      issueLabelCreate(input: $input) { success issueLabel { id name color } }
+    }`,
+    { input: { name: input.name, color: input.color ?? "#6e7b8b", teamId: input.teamId } },
+  );
+  if (!d.issueLabelCreate?.success) throw new Error("Linear recusou criar a label.");
+  return d.issueLabelCreate.issueLabel;
+}
+
+/** Edita uma label (nome e/ou cor). */
+export async function updateLinearLabel(
+  apiKey: string,
+  id: string,
+  input: { name?: string; color?: string },
+): Promise<{ id: string; name: string; color: string }> {
+  const d = await linearGraphQL<{ issueLabelUpdate: { success: boolean; issueLabel: { id: string; name: string; color: string } } }>(
+    apiKey,
+    `mutation($id: String!, $input: IssueLabelUpdateInput!) {
+      issueLabelUpdate(id: $id, input: $input) { success issueLabel { id name color } }
+    }`,
+    { id, input },
+  );
+  if (!d.issueLabelUpdate?.success) throw new Error("Linear recusou editar a label.");
+  return d.issueLabelUpdate.issueLabel;
+}
+
+/** Adiciona uma label a uma issue (sem mexer nas demais). */
+export async function addLinearIssueLabel(apiKey: string, issueId: string, labelId: string): Promise<void> {
+  const d = await linearGraphQL<{ issueAddLabel: { success: boolean } }>(
+    apiKey,
+    `mutation($id: String!, $labelId: String!) { issueAddLabel(id: $id, labelId: $labelId) { success } }`,
+    { id: issueId, labelId },
+  );
+  if (!d.issueAddLabel?.success) throw new Error("Linear recusou adicionar a label.");
+}
+
+/** Remove uma label de uma issue. */
+export async function removeLinearIssueLabel(apiKey: string, issueId: string, labelId: string): Promise<void> {
+  const d = await linearGraphQL<{ issueRemoveLabel: { success: boolean } }>(
+    apiKey,
+    `mutation($id: String!, $labelId: String!) { issueRemoveLabel(id: $id, labelId: $labelId) { success } }`,
+    { id: issueId, labelId },
+  );
+  if (!d.issueRemoveLabel?.success) throw new Error("Linear recusou remover a label.");
 }
 
 export interface CreatedIssue { identifier: string; title: string; url: string }
