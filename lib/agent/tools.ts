@@ -110,7 +110,8 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
           time: { type: "string", description: "Filtra por time (nome ou key). Opcional." },
           projeto: { type: "string", description: "Filtra por projeto (nome). Requer 'time' pra resolver corretamente. Opcional." },
           status: { type: "array", items: { type: "string" }, description: "Filtra por status (nomes exatos do Linear, ex: ['Done','In Progress']). Opcional — use pra puxar só um subconjunto e economizar." },
-          incluir_comentarios: { type: "boolean", description: "Se true, traz os comentários (Activity) de cada issue. Use só em relatórios que precisam do detalhe do dev. Padrão false." },
+          incluir_descricao: { type: "boolean", description: "Se true, traz a descrição de cada issue. Padrão false (mais econômico). Ligue quando o relatório precisar do conteúdo das issues." },
+          incluir_comentarios: { type: "boolean", description: "Se true, traz os comentários (Activity) de cada issue — ex: diagnósticos do dev. Padrão false. Mais pesado em tokens." },
         },
       },
     },
@@ -332,12 +333,15 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
             ? [String(input.status)]
             : undefined;
         const LIMIT = 100;
+        const withComments = input.incluir_comentarios === true;
         const issues = await listLinearIssues(key, {
           limit: LIMIT,
           teamKey: matched?.key,
           projectId: proj?.id,
           statusNames,
-          withComments: input.incluir_comentarios === true,
+          // Comentários implicam descrição (relatório detalhado).
+          withDescription: input.incluir_descricao === true || withComments,
+          withComments,
         });
 
         return {
