@@ -371,6 +371,7 @@ export function HubView() {
   const recognitionRef = useRef<SpeechRecognitionLike | null>(null);
   const transcriptRef = useRef<string>(""); // transcrição final acumulada
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const chatScrollRef = useRef<HTMLDivElement>(null);
   const execEndRef = useRef<HTMLDivElement>(null);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const execInputRef = useRef<HTMLInputElement>(null);
@@ -406,6 +407,28 @@ export function HubView() {
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isTyping]);
+
+  // Máscara de esmaecimento nas bordas do chat — só esmaece o lado que tem
+  // conteúdo escondido (topo e/ou base), pra não desbotar à toa quando não rola.
+  const [chatMask, setChatMask] = useState<string | undefined>(undefined);
+  const updateChatMask = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (!el) return;
+    const F = 36; // altura do fade, px
+    const top = el.scrollTop > 4;
+    const bottom = el.scrollTop + el.clientHeight < el.scrollHeight - 4;
+    if (!top && !bottom) { setChatMask(undefined); return; }
+    const a = top ? `transparent 0, #000 ${F}px` : "#000 0";
+    const b = bottom ? `#000 calc(100% - ${F}px), transparent 100%` : "#000 100%";
+    setChatMask(`linear-gradient(to bottom, ${a}, ${b})`);
+  }, []);
+  // Recalcula ao mudar mensagens/typing (conteúdo cresce) — inclui um tick após
+  // o scroll suave assentar.
+  useEffect(() => {
+    updateChatMask();
+    const t = setTimeout(updateChatMask, 360);
+    return () => clearTimeout(t);
+  }, [messages, isTyping, phase, updateChatMask]);
 
   // Uso REAL do mês (tokens + custo estimado) — atualiza ao abrir o chat.
   const fetchUsage = useCallback(async () => {
@@ -1211,7 +1234,12 @@ export function HubView() {
               transition={{ duration: 0.4, ease: [0.25, 0.46, 0.45, 0.94] }}
               className="w-full max-w-[480px] md:max-w-[640px] lg:max-w-[760px] xl:max-w-[860px]">
 
-              <div className="mb-4 flex max-h-[min(60vh,640px)] flex-col gap-3 overflow-y-auto px-1 py-1" style={{ scrollbarWidth: "none" }}>
+              <div
+                ref={chatScrollRef}
+                onScroll={updateChatMask}
+                className="mb-4 flex max-h-[min(60vh,640px)] flex-col gap-3 overflow-y-auto px-1 py-1"
+                style={{ scrollbarWidth: "none", WebkitMaskImage: chatMask, maskImage: chatMask }}
+              >
                 <AnimatePresence initial={false}>
                   {messages.map((msg) => (
                     <MessageRow key={msg.id} msg={msg} chatBusy={chatBusy} onPick={pickChoice} onPreview={openPreview} />
