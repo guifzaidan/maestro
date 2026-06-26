@@ -112,12 +112,40 @@ interface BranchStats { tokensUsed: number; tokensLimit: number; costUsd: number
 
 const EMPTY_STATS: BranchStats = { tokensUsed: 0, tokensLimit: 5_000_000, costUsd: 0, creditsUsd: 50 };
 
+/** #rrggbb → rgba(r, g, b, alpha) — gera o accentSoft a partir do accent. */
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.replace("#", "");
+  const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+  const n = parseInt(full, 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
+/** Seletor de cor compacto: swatch (abre o picker nativo) + hex. */
+function ColorField({ value, onChange, title }: { value: string; onChange: (v: string) => void; title: string }) {
+  return (
+    <label className="flex cursor-pointer items-center gap-1.5" title={title}>
+      <span className="relative h-6 w-6 shrink-0 overflow-hidden rounded-md border border-[var(--border-strong)]" style={{ background: value }}>
+        <input
+          type="color"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="absolute -inset-2 cursor-pointer opacity-0"
+        />
+      </span>
+      <span className="font-mono text-[11px] text-muted">{value}</span>
+    </label>
+  );
+}
+
 function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
   const { toast } = useToast();
   const { reloadBranches } = useWorkspace();
   const [show, setShow] = useState(false);
   const [tokenInput, setTokenInput] = useState("");
   const [saving, setSaving] = useState(false);
+  // Cores editáveis (preview ao vivo); persistem ao salvar.
+  const [accent, setAccent] = useState(w.accent);
+  const [accent2, setAccent2] = useState(w.accent2);
   const [stats, setStats] = useState<BranchStats>(EMPTY_STATS);
   const [persisted, setPersisted] = useState<ConnectionDTO[]>([]);
 
@@ -142,7 +170,7 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: w.id, name: w.name, short: w.short, icon: w.icon,
-          accent: w.accent, accent2: w.accent2, accentSoft: w.accentSoft, tagline: w.tagline,
+          accent, accent2, accentSoft: hexToRgba(accent, 0.18), tagline: w.tagline,
           // Só envia token se o usuário digitou algo (senão preserva o salvo).
           ...(tokenInput.trim() ? { claudeToken: tokenInput.trim() } : {}),
         }),
@@ -192,13 +220,13 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
     <GlassCard className="p-5" hover>
       {/* Header */}
       <div className="flex items-center gap-3">
-        <WorkspaceBadge icon={w.icon} accent={w.accent} accent2={w.accent2} size={40} />
+        <WorkspaceBadge icon={w.icon} accent={accent} accent2={accent2} size={40} />
         <div className="flex-1">
           <h2 className="font-semibold">{w.name}</h2>
           <p className="text-xs text-muted-2">{w.tagline}</p>
         </div>
         <span className="flex items-center gap-1.5 rounded-full bg-[var(--surface)] px-3 py-1 text-[11px] text-muted">
-          <Dot color={w.accent} size={7} /> identidade
+          <Dot color={accent} size={7} /> identidade
         </span>
       </div>
 
@@ -232,11 +260,11 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
         </div>
 
         <div>
-          <label className="mb-1.5 block text-xs text-muted">Cor de acento</label>
-          <div className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5">
-            <motion.span whileHover={{ scale: 1.15 }} className="h-6 w-6 rounded-md shrink-0" style={{ background: `linear-gradient(135deg, ${w.accent}, ${w.accent2})` }} />
-            <span className="font-mono text-sm text-muted">{w.accent}</span>
-            <motion.button whileHover={{ x: 2 }} className="ml-auto text-xs text-muted hover:text-white">editar</motion.button>
+          <label className="mb-1.5 block text-xs text-muted">Cores de acento</label>
+          <div className="flex items-center gap-3 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2.5">
+            <span className="h-6 w-6 shrink-0 rounded-md" style={{ background: `linear-gradient(135deg, ${accent}, ${accent2})` }} />
+            <ColorField value={accent} onChange={setAccent} title="Cor primária" />
+            <ColorField value={accent2} onChange={setAccent2} title="Cor secundária" />
           </div>
         </div>
       </div>
@@ -254,7 +282,7 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
               animate={{ width: `${tokenPct}%` }}
               transition={{ duration: 0.8, ease: "easeOut" }}
               className="h-full rounded-full"
-              style={{ background: `linear-gradient(90deg, ${w.accent}, ${w.accent2})` }}
+              style={{ background: `linear-gradient(90deg, ${accent}, ${accent2})` }}
             />
           </div>
           <p className="mt-1 text-[10px] text-muted-2">{tokenPct}% utilizado</p>
@@ -271,7 +299,7 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
               animate={{ width: `${costPct}%` }}
               transition={{ duration: 0.8, ease: "easeOut", delay: 0.1 }}
               className="h-full rounded-full"
-              style={{ background: costPct > 80 ? "linear-gradient(90deg,#f59e0b,#ef4444)" : `linear-gradient(90deg, ${w.accent}, ${w.accent2})` }}
+              style={{ background: costPct > 80 ? "linear-gradient(90deg,#f59e0b,#ef4444)" : `linear-gradient(90deg, ${accent}, ${accent2})` }}
             />
           </div>
           <p className="mt-1 text-[10px] text-muted-2">{costPct}% dos créditos consumido</p>
@@ -284,7 +312,7 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
         <div className="min-w-0 flex-1">
           <div className="mb-1 flex items-center justify-between">
             <span className="text-[11px] text-muted">Perfil de integração</span>
-            <span className="text-[11px] font-medium" style={{ color: integrationPct === 100 ? "#34d399" : w.accent }}>
+            <span className="text-[11px] font-medium" style={{ color: integrationPct === 100 ? "#34d399" : accent }}>
               {connectedIntegrations}/{totalIntegrations} ativas · {integrationPct}%
             </span>
           </div>
@@ -294,7 +322,7 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
               animate={{ width: `${integrationPct}%` }}
               transition={{ duration: 0.8, ease: "easeOut", delay: 0.2 }}
               className="h-full rounded-full"
-              style={{ background: integrationPct === 100 ? "#34d399" : `linear-gradient(90deg, ${w.accent}, ${w.accent2})` }}
+              style={{ background: integrationPct === 100 ? "#34d399" : `linear-gradient(90deg, ${accent}, ${accent2})` }}
             />
           </div>
         </div>
@@ -306,12 +334,12 @@ function WorkspaceVault({ workspace: w }: { workspace: Workspace }) {
           {w.hasToken ? "Token Claude cifrado no banco" : "Nenhum token Claude configurado"}
         </span>
         <motion.button
-          whileHover={{ scale: saving ? 1 : 1.05, boxShadow: saving ? undefined : `0 0 18px -5px ${w.accent}` }}
+          whileHover={{ scale: saving ? 1 : 1.05, boxShadow: saving ? undefined : `0 0 18px -5px ${accent}` }}
           whileTap={{ scale: saving ? 1 : 0.95 }}
           onClick={handleSave}
           disabled={saving}
           className="rounded-full px-3.5 py-1.5 text-xs font-medium text-white disabled:opacity-50"
-          style={{ background: `linear-gradient(135deg, ${w.accent}, ${w.accent2})` }}
+          style={{ background: `linear-gradient(135deg, ${accent}, ${accent2})` }}
         >
           {saving ? "Salvando…" : "Salvar"}
         </motion.button>
