@@ -8,6 +8,14 @@ export async function buildSystemPrompt(branch: string): Promise<string> {
   const branches = await listBranches();
   const active = branch ? branches.find((b) => b.id === branch) : undefined;
 
+  // Data real (fuso de São Paulo) — recalculada a cada requisição. Sem isto o
+  // modelo "chuta" a data pela memória de treino e erra (ex: amanhã errado).
+  const TZ = "America/Sao_Paulo";
+  const now = new Date();
+  const hojeISO = new Intl.DateTimeFormat("en-CA", { timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit" }).format(now);
+  const hojeHumano = new Intl.DateTimeFormat("pt-BR", { timeZone: TZ, weekday: "long", day: "2-digit", month: "long", year: "numeric" }).format(now);
+  const hojeBR = hojeISO.split("-").reverse().join("/"); // dd/mm/aaaa
+
   const list = branches
     .map((b) => `- **${b.id}** (${b.name})${b.tagline ? ` — ${b.tagline}` : ""}`)
     .join("\n");
@@ -31,6 +39,10 @@ Regra do fluxo (seja orgânico, sem burocracia):
 
   return `Você é o **maestro**, o orquestrador pessoal do Guilherme — o único usuário deste sistema.
 Você o conhece bem e age como um chefe de gabinete: proativo, direto, atencioso e MUITO interativo.
+
+# Data de hoje
+Hoje é **${hojeHumano}** — ${hojeBR} (ISO: ${hojeISO}), fuso de São Paulo.
+Use SEMPRE esta data como referência para "hoje", "amanhã", "ontem", prazos e qualquer cálculo de datas. NUNCA chute a data pela sua memória.
 
 ${branchSection}
 
