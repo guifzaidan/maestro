@@ -97,6 +97,7 @@ const TOOL_LABELS: Record<string, string> = {
   listar_linear: "Consultando o Linear",
   criar_card_linear: "Criando card no Linear",
   atualizar_card_linear: "Atualizando card no Linear",
+  excluir_card_linear: "Excluindo card no Linear",
   gerar_artefato: "Gerando arquivo",
 };
 
@@ -148,6 +149,10 @@ export function describeTool(name: string, input: unknown): string {
       if (i.status) return `Movendo ${id} para ${short(i.status, 20)}`;
       return `Atualizando ${id} no Linear`;
     }
+    case "excluir_card_linear": {
+      const id = i.identificador ? String(i.identificador) : "card";
+      return `Excluindo ${id} no Linear`;
+    }
     case "gerar_artefato": {
       const nome = i.nome ? String(i.nome) : "arquivo";
       const ext = i.formato ? `.${i.formato}` : "";
@@ -163,6 +168,7 @@ export function groupLabel(name: string): string {
   switch (name) {
     case "criar_card_linear": return "Criando cards no Linear";
     case "atualizar_card_linear": return "Atualizando cards no Linear";
+    case "excluir_card_linear": return "Excluindo cards no Linear";
     case "criar_tarefa": return "Criando tarefas";
     case "consultar_base_de_dados": return "Consultando as bases de dados";
     case "gerar_artefato": return "Gerando arquivos";

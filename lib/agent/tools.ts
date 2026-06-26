@@ -4,7 +4,7 @@ import { listBranches } from "@/lib/db/branches";
 import { listTursoTargets, getConnectionSecret, type TursoTarget } from "@/lib/db/connections";
 import { introspectTurso } from "@/lib/turso-introspect";
 import { queryTurso } from "@/lib/turso-query";
-import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue, listLinearWorkflowStates, getLinearIssueByIdentifier, updateLinearIssue } from "@/lib/linear";
+import { listLinearTeams, listLinearProjects, listLinearIssues, createLinearIssue, listLinearWorkflowStates, getLinearIssueByIdentifier, updateLinearIssue, deleteLinearIssue } from "@/lib/linear";
 import { buildArtifact, type ArtifactFormat } from "./artifacts";
 
 /** Contexto de execução de uma ferramenta — a branch ativa pode ser vazia (home). */
@@ -142,6 +142,20 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
           status: { type: "string", description: "Novo status (nome exato do workflow state, ex: 'Done', 'In Progress'). Opcional." },
           titulo: { type: "string", description: "Novo título do card. Opcional." },
           descricao: { type: "string", description: "Nova descrição em markdown. Opcional." },
+        },
+        required: ["identificador"],
+      },
+    },
+    {
+      name: "excluir_card_linear",
+      description:
+        "Exclui um card (issue) do Linear pelo identificador (ex: 'ART-29'). O card vai pra lixeira do Linear " +
+        "(recuperável por ~30 dias). Ação destrutiva: só use quando o usuário pedir claramente pra excluir/apagar/deletar o card.",
+      input_schema: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: BRANCH_DESC },
+          identificador: { type: "string", description: "Identificador do card a excluir, ex: 'ART-29'." },
         },
         required: ["identificador"],
       },
@@ -412,6 +426,23 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
 
         const updated = await updateLinearIssue(key, issue.id, update);
         return { ok: true, card: { id: updated.identifier, titulo: updated.title, url: updated.url }, novo_status: statusName };
+      } catch (e) {
+        return { ok: false, error: e instanceof Error ? e.message : String(e) };
+      }
+    }
+
+    case "excluir_card_linear": {
+      const branch = await resolveBranchId((input.branch as string) ?? ctx.branch);
+      if (!branch) return { ok: false, error: "ASK_BRANCH: pergunte ao usuário de qual branch é o Linear." };
+      const key = await getConnectionSecret(`linear--${branch}`);
+      if (!key) return { ok: false, error: "Linear não conectado nesta branch. Configure em Integrações." };
+      const identificador = String(input.identificador ?? "").trim();
+      if (!identificador) return { ok: false, error: "Identificador do card (ex: 'ART-29') é obrigatório." };
+      try {
+        const issue = await getLinearIssueByIdentifier(key, identificador);
+        if (!issue) return { ok: false, error: `Card '${identificador}' não encontrado no Linear.` };
+        await deleteLinearIssue(key, issue.id);
+        return { ok: true, excluido: { id: issue.identifier, titulo: issue.title } };
       } catch (e) {
         return { ok: false, error: e instanceof Error ? e.message : String(e) };
       }

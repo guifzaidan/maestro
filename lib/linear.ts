@@ -128,6 +128,19 @@ export async function updateLinearIssue(
   return d.issueUpdate.issue;
 }
 
+/**
+ * Exclui um card do Linear. Usa `issueDelete`, que move o card pra lixeira
+ * (recuperável por ~30 dias no Linear) — não é um hard-delete irreversível.
+ */
+export async function deleteLinearIssue(apiKey: string, issueId: string): Promise<void> {
+  const d = await linearGraphQL<{ issueDelete: { success: boolean } }>(
+    apiKey,
+    `mutation($id: String!) { issueDelete(id: $id) { success } }`,
+    { id: issueId },
+  );
+  if (!d.issueDelete?.success) throw new Error("Linear recusou a exclusão do card.");
+}
+
 export interface CreatedIssue { identifier: string; title: string; url: string }
 
 export async function createLinearIssue(
