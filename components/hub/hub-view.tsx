@@ -1013,7 +1013,7 @@ export function HubView() {
 
   return (
     <PageTransition>
-      <div className="relative flex min-h-[calc(100vh-72px)] flex-col items-center justify-center pb-16 pt-6">
+      <div className="relative flex min-h-[calc(100vh-120px)] flex-col items-center justify-center pb-16 pt-6">
 
         {/* O fundo agora é global (GlobalBackground no AppShell), aparece em todas
             as páginas — a home não tem mais fundo próprio. */}
