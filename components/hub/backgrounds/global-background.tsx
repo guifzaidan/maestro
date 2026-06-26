@@ -24,6 +24,6 @@ export function GlobalBackground() {
     if (q === "aurora" || q === "colorbends" || q === "colorbends3") setVariant(q);
   }, []);
 
-  // Mobile usa a aurora leve (ColorBends WebGL só no desktop, por performance).
-  return <HeroBackground variant={isMobile ? "aurora" : variant} isMobile={isMobile} activeWs={activeWs} />;
+  // Mesma variante (ColorBends) também no mobile.
+  return <HeroBackground variant={variant} isMobile={isMobile} activeWs={activeWs} />;
 }
