@@ -99,17 +99,18 @@ export async function buildTools(): Promise<Anthropic.Tool[]> {
     {
       name: "listar_linear",
       description:
-        "Lista times, projetos e issues recentes do Linear conectado à branch. Filtros opcionais: 'time' (nome/key) e 'projeto' (nome). " +
-        "Sem filtro, traz a visão geral (todos os times + issues recentes). Passe 'time' pra ver os projetos daquele time. " +
-        "Use pra descobrir time/projeto antes de criar um card. Cada issue já vem com a descrição. " +
-        "Para relatórios mais completos, passe incluir_comentarios=true pra trazer também os comentários (Activity) de cada issue — ex: as observações do dev.",
+        "Lista times, projetos e issues do Linear conectado à branch (até 100 por chamada, mais recentes primeiro). Filtros opcionais: 'time' (nome/key), 'projeto' (nome) e 'status' (lista de status, ex: ['Done']). " +
+        "Sem filtro, traz a visão geral. Passe 'time' pra ver os projetos daquele time. Cada issue já vem com a descrição. " +
+        "Para relatórios completos, passe incluir_comentarios=true pra trazer também os comentários (Activity) — ex: as observações do dev. " +
+        "ECONOMIA: filtrar por status e só incluir comentários quando necessário reduz bastante o volume (tokens). Se o resultado vier no teto (100), pode haver mais — avise e refine.",
       input_schema: {
         type: "object",
         properties: {
           branch: { type: "string", description: BRANCH_DESC },
           time: { type: "string", description: "Filtra por time (nome ou key). Opcional." },
           projeto: { type: "string", description: "Filtra por projeto (nome). Requer 'time' pra resolver corretamente. Opcional." },
-          incluir_comentarios: { type: "boolean", description: "Se true, traz os comentários (Activity) de cada issue. Use em relatórios completos. Padrão false." },
+          status: { type: "array", items: { type: "string" }, description: "Filtra por status (nomes exatos do Linear, ex: ['Done','In Progress']). Opcional — use pra puxar só um subconjunto e economizar." },
+          incluir_comentarios: { type: "boolean", description: "Se true, traz os comentários (Activity) de cada issue. Use só em relatórios que precisam do detalhe do dev. Padrão false." },
         },
       },
     },
@@ -325,10 +326,17 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
         const projects = await listLinearProjects(key, matched?.id);
         const proj = input.projeto ? matchProject(projects, String(input.projeto)) : null;
 
+        const statusNames = Array.isArray(input.status)
+          ? input.status.map((s) => String(s)).filter(Boolean)
+          : input.status
+            ? [String(input.status)]
+            : undefined;
+        const LIMIT = 100;
         const issues = await listLinearIssues(key, {
-          limit: 25,
+          limit: LIMIT,
           teamKey: matched?.key,
           projectId: proj?.id,
+          statusNames,
           withComments: input.incluir_comentarios === true,
         });
 
@@ -336,6 +344,10 @@ export async function executeTool(name: string, input: ToolInput, ctx: ToolConte
           ok: true,
           time_filtrado: matched?.name ?? null,
           projeto_filtrado: proj?.name ?? null,
+          status_filtrado: statusNames ?? null,
+          total_issues: issues.length,
+          // Bateu no teto → pode haver mais. Avise o usuário e ofereça refinar.
+          truncado: issues.length >= LIMIT,
           teams: teams.map((t) => ({ nome: t.name, key: t.key })),
           projetos: projects.map((p) => ({ nome: p.name, estado: p.state ?? null })),
           issues: issues.map((i) => ({

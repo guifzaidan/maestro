@@ -55,12 +55,13 @@ export async function listLinearProjects(apiKey: string, teamId?: string): Promi
 }
 
 /** Filtros opcionais para listar issues. */
-export interface IssueFilter { limit?: number; teamKey?: string; projectId?: string; withComments?: boolean }
+export interface IssueFilter { limit?: number; teamKey?: string; projectId?: string; withComments?: boolean; statusNames?: string[] }
 
 export async function listLinearIssues(apiKey: string, filter: IssueFilter = {}): Promise<LinearIssue[]> {
   const f: Record<string, unknown> = {};
   if (filter.teamKey) f.team = { key: { eq: filter.teamKey } };
   if (filter.projectId) f.project = { id: { eq: filter.projectId } };
+  if (filter.statusNames && filter.statusNames.length) f.state = { name: { in: filter.statusNames } };
   // Comentários (Activity) — só quando pedido, pra não pesar a listagem normal.
   const commentsFrag = filter.withComments
     ? `comments(first: 30) { nodes { body createdAt user { displayName name email } } }`
@@ -72,7 +73,7 @@ export async function listLinearIssues(apiKey: string, filter: IssueFilter = {})
         nodes { identifier title description url state { name } team { name } project { name } assignee { name } ${commentsFrag} }
       }
     }`,
-    { n: filter.limit ?? 25, filter: Object.keys(f).length ? f : undefined },
+    { n: filter.limit ?? 100, filter: Object.keys(f).length ? f : undefined },
   );
   return d.issues.nodes;
 }
