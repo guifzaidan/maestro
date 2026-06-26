@@ -34,6 +34,20 @@
 
 ---
 
+## Integrações / Fireflies
+
+- **Puxar transcrições/resumos de reuniões (e virar contexto/tasks)** — conectar o Fireflies.ai por branch e deixar o maestro ler as reuniões (transcrição, resumo, action items, participantes) pra usar em relatórios e, principalmente, transformar **action items em tasks**.
+  - **Fluxo:** conexão por branch com a **API key do Fireflies** (Settings → Developer Settings) — padrão do Linear; connection id `fireflies--<branch>`, key cifrada. O maestro chama a API GraphQL do Fireflies (`https://api.fireflies.ai/graphql`, `Authorization: Bearer <key>`) server-side.
+  - **A construir:**
+    1. Card "Fireflies" no catálogo (`lib/mock/integrations.ts`, category `meeting`/`docs`) + form pra colar a API key na branch.
+    2. `lib/fireflies.ts` (cliente da API — listar transcrições/reuniões, pegar resumo + action items + frases de uma reunião por id).
+    3. Ferramenta(s) do maestro em `lib/agent/tools.ts` — ex: `listar_reunioes_fireflies` (recentes/por data) e `consultar_reuniao_fireflies` (resumo, action items, transcrição). Read-only; e opção de gerar tasks a partir dos action items (via `criar_tarefa`, due = hoje, usuário ajusta).
+    4. Prompt: orientar o maestro a ser econômico (resumo/action items por padrão; transcrição completa só se pedida) e a confirmar antes de criar várias tasks de uma reunião.
+  - **Sem precisar de URL pública** (são chamadas de saída, não webhook) → roda local sem deploy.
+  - **Decisões em aberto:** (a) escopo por branch (1 conta Fireflies por branch?); (b) virar task automaticamente vs. o maestro perguntar quais action items viram task; (c) filtro de reuniões (período, participante, título).
+
+---
+
 ## A definir
 
 <!-- Adicione novos itens aqui -->
