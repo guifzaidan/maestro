@@ -20,6 +20,20 @@
 
 ---
 
+## Integrações / GitHub
+
+- **Puxar infos de repositórios** — conectar o GitHub por branch e deixar o maestro ler informações dos repos (commits, PRs, issues, releases, arquivos, status de CI, metadados do repo) pra usar em relatórios e contexto.
+  - **Fluxo:** conexão por branch com um **Personal Access Token** (ou GitHub App) — padrão do Linear; connection id `github--<branch>`, token cifrado. O maestro usa o token (server-side) pra chamar a API do GitHub (REST/GraphQL).
+  - **A construir:**
+    1. Card "GitHub" no catálogo (`lib/mock/integrations.ts`, category nova `code`/`dev` ou `pm`) + form pra colar o token na branch.
+    2. `lib/github.ts` (cliente da API — autentica com o token; funções de leitura: listar repos, commits, PRs, issues, conteúdo de arquivo, etc.).
+    3. Ferramenta(s) do maestro em `lib/agent/tools.ts` — ex: `listar_github` / `consultar_repo_github` (repo, branch, tipo de info). Read-only no primeiro momento.
+    4. Prompt: orientar o maestro a usar GitHub pra contexto de dev em relatórios (cruzar com o Linear, ex: "esse card tem PR aberto?").
+  - **Escopo do token:** `repo` (repos privados) — leitura. Sem precisar de URL pública (são chamadas de saída, não webhook), então roda local sem deploy.
+  - **Decisões em aberto:** (a) PAT clássico vs. fine-grained vs. GitHub App; (b) só leitura, ou também escrita (abrir issue/PR, comentar) num segundo momento; (c) escopo por branch (1 conta/org por branch?).
+
+---
+
 ## A definir
 
 <!-- Adicione novos itens aqui -->
