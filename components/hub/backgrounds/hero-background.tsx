@@ -107,11 +107,15 @@ function ColorBendsBg({ colors }: { colors: string[] }) {
         parallax={0}
         noise={0.15}
         iterations={1}
-        intensity={1}
+        intensity={0.75}
         bandWidth={6}
         autoRotate={0}
+        preserveHue
         transparent
       />
+      {/* (A) Camada escura uniforme — abaixa o brilho geral pra texto branco
+          ler melhor em todas as páginas, sem matar as faixas. */}
+      <div className="absolute inset-0" style={{ background: "rgba(7,7,8,0.15)" }} />
       {/* Vinheta pra escurecer as bordas e manter o conteúdo legível. */}
       <div className="absolute inset-0" style={{ background: "radial-gradient(135% 100% at 50% 30%, transparent 50%, rgba(7,7,8,0.55) 100%)" }} />
     </div>
