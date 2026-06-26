@@ -404,8 +404,16 @@ export function HubView() {
   // Ao desmontar (sair da home), corta qualquer fala em andamento.
   useEffect(() => () => { try { window.speechSynthesis?.cancel(); } catch { /* ignore */ } }, []);
 
+  // "Grudado no fim": só auto-rola enquanto o usuário está perto da base. Se ele
+  // rolar pra cima durante a resposta, paramos de puxar — ele rola à vontade.
+  const stickToBottomRef = useRef(true);
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const last = messages[messages.length - 1];
+    const force = last?.role === "user"; // mensagem do próprio usuário → sempre desce
+    if (force) stickToBottomRef.current = true;
+    if (force || stickToBottomRef.current) {
+      chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
   }, [messages, isTyping]);
 
   // Máscara de esmaecimento nas bordas do chat — só esmaece o lado que tem
@@ -422,6 +430,20 @@ export function HubView() {
     const b = bottom ? `#000 calc(100% - ${F}px), transparent 100%` : "#000 100%";
     setChatMask(`linear-gradient(to bottom, ${a}, ${b})`);
   }, []);
+  // Handler de scroll do chat: atualiza "grudado no fim" + a máscara.
+  // Só DESLIGA o stick quando o usuário rola pra CIMA (scrollTop diminui) — o
+  // scroll programático só desce, então nunca é confundido com intenção do user.
+  const lastScrollTopRef = useRef(0);
+  const onChatScroll = useCallback(() => {
+    const el = chatScrollRef.current;
+    if (el) {
+      const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 64;
+      if (el.scrollTop < lastScrollTopRef.current - 2) stickToBottomRef.current = false; // rolou pra cima
+      else if (atBottom) stickToBottomRef.current = true; // voltou pro fim
+      lastScrollTopRef.current = el.scrollTop;
+    }
+    updateChatMask();
+  }, [updateChatMask]);
   // Recalcula ao mudar mensagens/typing (conteúdo cresce) — inclui um tick após
   // o scroll suave assentar.
   useEffect(() => {
@@ -1236,7 +1258,7 @@ export function HubView() {
 
               <div
                 ref={chatScrollRef}
-                onScroll={updateChatMask}
+                onScroll={onChatScroll}
                 className="mb-4 flex max-h-[min(60vh,640px)] flex-col gap-3 overflow-y-auto px-1 py-1"
                 style={{ scrollbarWidth: "none", WebkitMaskImage: chatMask, maskImage: chatMask }}
               >
