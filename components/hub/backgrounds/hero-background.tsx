@@ -103,8 +103,8 @@ function ColorBendsBg({ colors }: { colors: string[] }) {
         scale={1}
         frequency={1}
         warpStrength={1}
-        mouseInfluence={0.05}
-        parallax={0.5}
+        mouseInfluence={0}
+        parallax={0}
         noise={0.15}
         iterations={1}
         intensity={1}
@@ -119,13 +119,15 @@ function ColorBendsBg({ colors }: { colors: string[] }) {
 }
 
 export function HeroBackground({
-  variant, isMobile, activeWs,
+  variant, isMobile, activeWs, colorsOverride,
 }: {
   variant: HeroBackgroundVariant;
   isMobile: boolean;
   activeWs: ActiveWs;
+  /** Sobrescreve a paleta das variantes ColorBends (ex: ciclo de cores na home). */
+  colorsOverride?: string[];
 }) {
-  if (variant === "colorbends") return <ColorBendsBg colors={BEND_COLORS} />;
-  if (variant === "colorbends3") return <ColorBendsBg colors={[activeWs.accent, activeWs.accent2, "#6366f1"]} />;
+  if (variant === "colorbends") return <ColorBendsBg colors={colorsOverride ?? BEND_COLORS} />;
+  if (variant === "colorbends3") return <ColorBendsBg colors={colorsOverride ?? [activeWs.accent, activeWs.accent2, "#6366f1"]} />;
   return <AuroraBeams isMobile={isMobile} activeWs={activeWs} />;
 }
