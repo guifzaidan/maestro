@@ -1352,7 +1352,12 @@ function BranchChip({ task }: { task: Task }) {
   const toggle = () => {
     if (!open) {
       const r = btnRef.current?.getBoundingClientRect();
-      if (r) setCoords({ top: r.bottom + 6, left: r.right });
+      if (r) {
+        // Se não couber embaixo (ex: task perto do rodapé no mobile), abre pra cima.
+        const estH = branches.length * 36 + 14; // altura estimada do menu
+        const openUp = r.bottom + 6 + estH > window.innerHeight - 8;
+        setCoords({ top: openUp ? Math.max(8, r.top - estH - 6) : r.bottom + 6, left: r.right });
+      }
     }
     setOpen((o) => !o);
   };
