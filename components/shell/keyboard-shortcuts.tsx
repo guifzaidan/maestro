@@ -8,6 +8,7 @@ import { useToast } from "@/components/ui/toast";
 import { WorkspaceDot } from "@/components/shell/header";
 import { Icon } from "@/components/ui/icon";
 import { DatePicker } from "@/components/ui/date-picker";
+import { fetchGroupMeta } from "@/lib/task-groups-client";
 import { TODAY_LIST, type TaskList } from "@/lib/mock/tasks";
 import { cn } from "@/lib/utils";
 
@@ -17,6 +18,7 @@ interface QuickTask {
   title: string;
   branch: string;
   done: boolean;
+  groups?: string | null;
 }
 
 /** Remove acentos e baixa a caixa pra busca tolerante. */
@@ -122,7 +124,7 @@ export function KeyboardShortcuts() {
   }, [setActive, setAllBranches, toast, startChat]);
 
   const createTask = useCallback(
-    async (title: string, due: string = todayStr()) => {
+    async (title: string, due: string = todayStr(), groups: string[] = []) => {
       const trimmed = title.trim();
       if (!trimmed) return;
       setQuickAdd(false);
@@ -130,7 +132,7 @@ export function KeyboardShortcuts() {
         const res = await fetch("/api/tasks", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title: trimmed, branch: active, list: listForDue(due), due }),
+          body: JSON.stringify({ title: trimmed, branch: active, list: listForDue(due), due, groups }),
         });
         const data = await res.json();
         if (data.task) {
@@ -178,45 +180,84 @@ function QuickAddTask({
   onClose, onSubmit, onToggleDone,
 }: {
   onClose: () => void;
-  onSubmit: (title: string, due: string) => void;
+  onSubmit: (title: string, due: string, groups: string[]) => void;
   onToggleDone: (id: string, done: boolean) => void;
 }) {
   const { branches, active: activeBranch, allBranches, activeWorkspace, setActive, setAllBranches } = useWorkspace();
   const [value, setValue] = useState("");
   const [due, setDue] = useState(todayStr());
   const [allTasks, setAllTasks] = useState<QuickTask[]>([]);
+  const [knownGroups, setKnownGroups] = useState<string[]>([]);
+  const [groups, setGroups] = useState<string[]>([]); // grupos atrelados a esta nova task
   // Concluídas localmente nesta sessão do overlay (otimista, sem refetch).
   const [doneLocal, setDoneLocal] = useState<Record<string, boolean>>({});
   // -1 = linha "criar"; 0..n = resultados da busca.
   const [sel, setSel] = useState(-1);
+  // Seleção dentro das sugestões de grupo (modo hashtag).
+  const [gsel, setGsel] = useState(0);
   const [branchOpen, setBranchOpen] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  // Carrega as tarefas uma vez quando o overlay abre.
+  // Carrega as tarefas + grupos conhecidos quando o overlay abre.
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/tasks")
-      .then((r) => r.json())
-      .then((d) => { if (!cancelled) setAllTasks((d.tasks ?? []) as QuickTask[]); })
-      .catch(() => {});
+    Promise.all([
+      fetch("/api/tasks").then((r) => r.json()).catch(() => ({})),
+      fetchGroupMeta(),
+    ]).then(([d, meta]) => {
+      if (cancelled) return;
+      const rows = (d.tasks ?? []) as QuickTask[];
+      setAllTasks(rows);
+      const set = new Set<string>();
+      rows.forEach((r) => {
+        if (!r.groups) return;
+        try { (JSON.parse(r.groups) as string[]).forEach((g) => set.add(g)); } catch {}
+      });
+      meta.empty.forEach((e) => set.add(e.name));
+      setKnownGroups([...set].sort((a, b) => a.localeCompare(b, "pt-BR")));
+    });
     return () => { cancelled = true; };
   }, []);
 
+  // Detecta uma hashtag sendo digitada no fim do texto: "#nome do grupo".
+  // Nomes podem ter espaços, então a query vai do último "#" até o fim.
+  const hashMatch = /#([^#]*)$/.exec(value);
+  const hashActive = hashMatch !== null;
+  const hashQuery = hashMatch ? hashMatch[1] : "";
+  const nHashQuery = norm(hashQuery.trim());
+
+  const groupSuggestions = useMemo(() => {
+    if (!hashActive) return [] as string[];
+    return knownGroups
+      .filter((g) => !groups.some((x) => norm(x) === norm(g)))
+      .filter((g) => norm(g).includes(nHashQuery))
+      .slice(0, 6);
+  }, [hashActive, knownGroups, groups, nHashQuery]);
+
+  const hashExact = knownGroups.some((g) => norm(g) === nHashQuery) || groups.some((g) => norm(g) === nHashQuery);
+  const canCreateGroup = hashActive && hashQuery.trim().length > 0 && !hashExact;
+  // Opções navegáveis do modo hashtag: sugestões + (opcional) "criar novo".
+  const groupOptions: { name: string; create: boolean }[] = [
+    ...groupSuggestions.map((name) => ({ name, create: false })),
+    ...(canCreateGroup ? [{ name: hashQuery.trim(), create: true }] : []),
+  ];
+
   const q = value.trim();
   const matches = useMemo(() => {
-    if (!q) return [] as QuickTask[];
+    if (!q || hashActive) return [] as QuickTask[];
     const nq = norm(q);
     return allTasks
       .filter((t) => allBranches || t.branch === activeBranch)
       .filter((t) => norm(t.title).includes(nq))
       .slice(0, 6);
-  }, [q, allTasks, allBranches, activeBranch]);
+  }, [q, hashActive, allTasks, allBranches, activeBranch]);
 
   // Reposiciona a seleção quando os resultados mudam (volta pra linha "criar").
   useEffect(() => { setSel(-1); }, [q]);
+  useEffect(() => { setGsel(0); }, [hashQuery, hashActive]);
 
   const toggle = (t: QuickTask) => {
     const next = !(doneLocal[t.id] ?? t.done);
@@ -224,8 +265,43 @@ function QuickAddTask({
     onToggleDone(t.id, next);
   };
 
+  // Atrela um grupo e remove a hashtag digitada do texto.
+  const attachGroup = (name: string) => {
+    const v = name.trim();
+    if (v && !groups.some((x) => norm(x) === norm(v))) setGroups((p) => [...p, v]);
+    setValue((val) => val.replace(/#([^#]*)$/, "").replace(/\s+$/, ""));
+    inputRef.current?.focus();
+  };
+  const removeGroup = (name: string) => setGroups((p) => p.filter((g) => g !== name));
+
+  // Monta título + grupos finais e envia. Converte hashtag não-selecionada em grupo.
+  const submit = () => {
+    let title = value;
+    const g = [...groups];
+    const m = /#([^#]*)$/.exec(title);
+    if (m) {
+      const t = m[1].trim();
+      if (t && !g.some((x) => norm(x) === norm(t))) g.push(t);
+      title = title.replace(/#([^#]*)$/, "").replace(/\s+$/, "");
+    }
+    onSubmit(title, due, g);
+  };
+
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
+
+    // Modo hashtag: navega/seleciona grupos em vez de buscar tarefas.
+    if (hashActive && groupOptions.length > 0) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setGsel((s) => Math.min(s + 1, groupOptions.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setGsel((s) => Math.max(s - 1, 0)); return; }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const opt = groupOptions[Math.min(gsel, groupOptions.length - 1)];
+        if (opt) attachGroup(opt.name);
+        return;
+      }
+    }
+
     if (e.key === "ArrowDown") {
       e.preventDefault();
       setSel((s) => Math.min(s + 1, matches.length - 1));
@@ -239,7 +315,7 @@ function QuickAddTask({
     if (e.key === "Enter") {
       e.preventDefault();
       if (sel >= 0 && matches[sel]) toggle(matches[sel]);
-      else onSubmit(value, due);
+      else submit();
     }
   };
 
@@ -344,10 +420,61 @@ function QuickAddTask({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="O que precisa ser feito? (ou digite pra buscar)"
+          placeholder="O que precisa ser feito? (#grupo pra agrupar · ou busque)"
           className="w-full rounded-xl bg-white/[0.04] px-3.5 py-2.5 text-sm text-white outline-none placeholder:text-muted-2"
           style={{ border: "1px solid rgba(255,255,255,0.08)" }}
         />
+
+        {/* Grupos atrelados (chips) */}
+        {groups.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 px-0.5">
+            {groups.map((g) => (
+              <span key={g} className="flex items-center gap-1 rounded-full bg-white/[0.10] px-2 py-0.5 text-[11px] text-white/80">
+                <Icon name="Layers" size={9} strokeWidth={2} className="text-white/40" />
+                {g}
+                <button type="button" onClick={() => removeGroup(g)} className="cursor-pointer text-white/40 transition-colors hover:text-white">
+                  <Icon name="X" size={10} strokeWidth={2.5} />
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* Sugestões de grupo (modo hashtag) */}
+        <AnimatePresence initial={false}>
+          {hashActive && groupOptions.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.16 }}
+              style={{ overflow: "hidden" }}
+            >
+              <div className="mt-2 flex flex-col gap-0.5">
+                <p className="px-1 pb-1 pt-1 text-[10px] uppercase tracking-widest text-muted-2">Grupos</p>
+                {groupOptions.map((opt, i) => {
+                  const activeRow = i === Math.min(gsel, groupOptions.length - 1);
+                  return (
+                    <button
+                      key={(opt.create ? "__create__" : "") + opt.name}
+                      onClick={() => attachGroup(opt.name)}
+                      onMouseEnter={() => setGsel(i)}
+                      className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors"
+                      style={{ background: activeRow ? "rgba(255,255,255,0.07)" : "transparent" }}
+                    >
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md border border-white/15 text-white/50">
+                        <Icon name={opt.create ? "Plus" : "Layers"} size={10} strokeWidth={2} />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-white/90">
+                        {opt.create ? <>Criar grupo <strong className="font-medium">“{opt.name}”</strong></> : opt.name}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Resultados da busca */}
         <AnimatePresence initial={false}>
@@ -453,7 +580,7 @@ function QuickAddTask({
           </div>
 
           <span>
-            <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono">Enter</kbd> {sel >= 0 ? "concluir" : "criar"} · <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono">Esc</kbd> fechar
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono">Enter</kbd> {hashActive && groupOptions.length > 0 ? "atrelar grupo" : sel >= 0 ? "concluir" : "criar"} · <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono">Esc</kbd> fechar
           </span>
         </div>
       </motion.div>
