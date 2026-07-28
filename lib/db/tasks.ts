@@ -10,6 +10,7 @@ export interface CreateTaskInput {
   tools?: string[] | null;
   instruction?: string | null;
   groups?: string[] | null;
+  flags?: string[] | null;
   sourceRecurring?: string | null;
 }
 
@@ -30,6 +31,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     tools: input.tools ? JSON.stringify(input.tools) : null,
     instruction: input.instruction ?? null,
     groups: input.groups && input.groups.length ? JSON.stringify(input.groups) : null,
+    flags: input.flags && input.flags.length ? JSON.stringify(input.flags) : null,
     createdAt: Date.now(),
     sourceRecurring: input.sourceRecurring ?? null,
   };
@@ -44,12 +46,13 @@ export async function toggleTask(id: string, done: boolean): Promise<void> {
 
 export async function updateTask(
   id: string,
-  fields: { title?: string; due?: string | null; instruction?: string | null; branch?: string; groups?: string[] | null },
+  fields: { title?: string; due?: string | null; instruction?: string | null; branch?: string; groups?: string[] | null; flags?: string[] | null },
 ): Promise<void> {
   await ensureSchema();
-  const { groups, ...rest } = fields;
+  const { groups, flags, ...rest } = fields;
   const set: Record<string, unknown> = { ...rest };
   if (groups !== undefined) set.groups = groups && groups.length ? JSON.stringify(groups) : null;
+  if (flags !== undefined) set.flags = flags && flags.length ? JSON.stringify(flags) : null;
   await db.update(tasks).set(set).where(eq(tasks.id, id));
 }
 

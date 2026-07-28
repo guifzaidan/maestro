@@ -13,7 +13,7 @@ import { Topbar } from "@/components/shell/topbar";
 import { Icon } from "@/components/ui/icon";
 import { Loader } from "@/components/ui/loader";
 import { useToast } from "@/components/ui/toast";
-import { TASK_LISTS, TODAY_LIST, type Task, type TaskList } from "@/lib/mock/tasks";
+import { TASK_LISTS, TASK_FLAGS, TODAY_LIST, type Task, type TaskList } from "@/lib/mock/tasks";
 import { cn } from "@/lib/utils";
 
 type View = "hoje" | "semana" | "mes" | "backlog" | "grupos";
@@ -81,6 +81,7 @@ interface DbTaskRow {
   due: string | null;
   instruction: string | null;
   groups: string | null;
+  flags: string | null;
   sourceRecurring: string | null;
 }
 
@@ -89,6 +90,8 @@ function toBoardTask(row: DbTaskRow): Task {
   const list = (row.list && VALID_LISTS.includes(row.list as TaskList) ? row.list : TODAY_LIST) as TaskList;
   let groups: string[] = [];
   if (row.groups) { try { groups = JSON.parse(row.groups) as string[]; } catch { groups = []; } }
+  let flags: string[] = [];
+  if (row.flags) { try { flags = JSON.parse(row.flags) as string[]; } catch { flags = []; } }
   return {
     id: row.id,
     title: row.title,
@@ -99,6 +102,7 @@ function toBoardTask(row: DbTaskRow): Task {
     description: row.instruction ?? undefined,
     recurring: !!row.sourceRecurring,
     groups,
+    flags,
   };
 }
 
@@ -201,13 +205,13 @@ export function TaskBoard() {
     toast("Tarefa atualizada", "edit");
   };
 
-  const saveTaskEdit = (id: string, fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[] }) => {
+  const saveTaskEdit = (id: string, fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[]; flags?: string[] }) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...fields } : t)));
     setEditTarget(null);
     fetch("/api/tasks", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, title: fields.title, due: fields.due ?? null, instruction: fields.description ?? null, branch: fields.branch ?? null, groups: fields.groups ?? [] }),
+      body: JSON.stringify({ id, title: fields.title, due: fields.due ?? null, instruction: fields.description ?? null, branch: fields.branch ?? null, groups: fields.groups ?? [], flags: fields.flags ?? [] }),
     }).catch(() => {});
     toast("Tarefa atualizada", "edit");
   };
@@ -1144,10 +1148,43 @@ function RecurringModal({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** Renderiza texto convertendo URLs (http/https/www) em links clicáveis. */
+function LinkifiedText({ text }: { text: string }) {
+  const re = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
+  const parts: React.ReactNode[] = [];
+  let last = 0;
+  let key = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) parts.push(text.slice(last, m.index));
+    let url = m[0];
+    let trail = "";
+    const tm = /[.,;:!?)\]]+$/.exec(url); // não engole pontuação final
+    if (tm) { trail = tm[0]; url = url.slice(0, -trail.length); }
+    const href = url.startsWith("http") ? url : `https://${url}`;
+    parts.push(
+      <a
+        key={key++}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="text-sky-400 underline decoration-sky-400/40 underline-offset-2 transition-colors hover:text-sky-300"
+      >
+        {url}
+      </a>,
+    );
+    if (trail) parts.push(trail);
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) parts.push(text.slice(last));
+  return <>{parts}</>;
+}
+
 function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
   task: Task;
   allGroups: string[];
-  onSave: (fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[] }) => void;
+  onSave: (fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[]; flags?: string[] }) => void;
   onCancel: () => void;
   onDelete: () => void;
 }) {
@@ -1155,6 +1192,8 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
   const [due, setDue] = useState(task.due ?? "");
   const [description, setDescription] = useState(task.description ?? "");
   const [groups, setGroups] = useState<string[]>(task.groups ?? []);
+  const [flags, setFlags] = useState<string[]>(task.flags ?? []);
+  const [descEditing, setDescEditing] = useState(false);
   const { branches } = useWorkspace();
   const [branch, setBranch] = useState<string>(task.branch);
   const [calOpen, setCalOpen] = useState(false);
@@ -1183,8 +1222,9 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
   const handleSave = () => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    onSave({ title: trimmed, due: due || undefined, description: description || undefined, branch, groups });
+    onSave({ title: trimmed, due: due || undefined, description: description || undefined, branch, groups, flags });
   };
+  const toggleFlag = (id: string) => setFlags((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id]));
 
   return (
     <motion.div
@@ -1317,23 +1357,62 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
             </AnimatePresence>
           </div>
 
+          {/* Flags */}
+          <div>
+            <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-widest text-white/40">Flags</label>
+            <div className="flex flex-wrap gap-1.5">
+              {TASK_FLAGS.map((f) => {
+                const on = flags.includes(f.id);
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    onClick={() => toggleFlag(f.id)}
+                    className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors"
+                    style={{
+                      border: `1px solid ${on ? f.color : "var(--border)"}`,
+                      background: on ? `${f.color}22` : "transparent",
+                      color: on ? f.color : "var(--muted)",
+                    }}
+                  >
+                    <Icon name={f.icon} size={12} strokeWidth={2} />
+                    {f.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Grupos */}
           <div>
             <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-widest text-white/40">Grupos</label>
             <GroupChipInput groups={groups} onChange={setGroups} suggestions={allGroups} />
           </div>
 
-          {/* Descrição */}
+          {/* Descrição — links clicáveis; clique no texto pra editar */}
           <div>
             <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-widest text-white/40">Descrição</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Detalhes, observações, notas…"
-              rows={3}
-              className="w-full resize-none rounded-xl px-3.5 py-2.5 text-[13px] text-white/90 outline-none placeholder:text-white/25 transition-colors"
-              style={FIELD_STYLE}
-            />
+            {descEditing || !description.trim() ? (
+              <textarea
+                autoFocus={descEditing}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                onBlur={() => setDescEditing(false)}
+                placeholder="Detalhes, observações, notas… (links viram clicáveis)"
+                rows={3}
+                className="w-full resize-none rounded-xl px-3.5 py-2.5 text-[13px] text-white/90 outline-none placeholder:text-white/25 transition-colors"
+                style={FIELD_STYLE}
+              />
+            ) : (
+              <div
+                onClick={() => setDescEditing(true)}
+                title="Clique para editar"
+                className="min-h-[46px] cursor-text whitespace-pre-wrap break-words rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-white/90 transition-colors"
+                style={FIELD_STYLE}
+              >
+                <LinkifiedText text={description} />
+              </div>
+            )}
           </div>
         </div>
 
@@ -1577,6 +1656,21 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         >
           {task.title}
         </span>
+        {task.flags && task.flags.length > 0 && (
+          <span className="flex shrink-0 items-center gap-1">
+            {TASK_FLAGS.filter((f) => task.flags!.includes(f.id)).map((f) => (
+              <span
+                key={f.id}
+                title={f.label}
+                className="flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+                style={{ background: `${f.color}22`, color: f.color }}
+              >
+                <Icon name={f.icon} size={9} strokeWidth={2.5} />
+                {f.label}
+              </span>
+            ))}
+          </span>
+        )}
         {task.recurring && (
           <Icon name="RefreshCcw" size={11} strokeWidth={2} className="shrink-0 text-muted-2" />
         )}

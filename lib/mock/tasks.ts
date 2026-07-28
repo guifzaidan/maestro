@@ -13,7 +13,17 @@ export interface Task {
   recurring?: boolean;
   /** Grupos/categorias (projeto, cliente, área). Ex: "Decentral", "Casa". */
   groups?: string[];
+  /** Flags de estado. Ex: "urgente", "bloqueada". */
+  flags?: string[];
 }
+
+export type TaskFlag = "urgente" | "bloqueada";
+
+/** Flags disponíveis nas tasks (conjunto fixo). Fonte de verdade do rótulo/cor. */
+export const TASK_FLAGS: { id: TaskFlag; label: string; icon: string; color: string }[] = [
+  { id: "urgente",   label: "Urgente",   icon: "Zap", color: "#f87171" },
+  { id: "bloqueada", label: "Bloqueada", icon: "Ban", color: "#fbbf24" },
+];
 
 export const TASK_LISTS: { id: TaskList; label: string; short: string; weekend: boolean }[] = [
   { id: "seg", label: "Segunda",  short: "Seg", weekend: false },

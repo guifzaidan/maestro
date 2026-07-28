@@ -19,6 +19,7 @@ export async function POST(request: Request) {
     tools: body.tools ?? null,
     instruction: body.instruction ?? null,
     groups: Array.isArray(body.groups) ? body.groups : null,
+    flags: Array.isArray(body.flags) ? body.flags : null,
   });
   return NextResponse.json({ task }, { status: 201 });
 }
@@ -31,12 +32,13 @@ export async function PATCH(request: Request) {
   if (typeof body.done === "boolean") {
     await toggleTask(body.id, body.done);
   } else {
-    const fields: { title?: string; due?: string | null; instruction?: string | null; branch?: string; groups?: string[] | null } = {};
+    const fields: { title?: string; due?: string | null; instruction?: string | null; branch?: string; groups?: string[] | null; flags?: string[] | null } = {};
     if (typeof body.title === "string" && body.title.trim()) fields.title = body.title.trim();
     if ("due" in body) fields.due = body.due ?? null;
     if ("instruction" in body) fields.instruction = body.instruction ?? null;
     if (typeof body.branch === "string" && body.branch.trim()) fields.branch = body.branch.trim();
     if ("groups" in body) fields.groups = Array.isArray(body.groups) ? body.groups : null;
+    if ("flags" in body) fields.flags = Array.isArray(body.flags) ? body.flags : null;
     if (Object.keys(fields).length === 0)
       return NextResponse.json({ error: "nenhum campo para atualizar" }, { status: 400 });
     await updateTask(body.id, fields);

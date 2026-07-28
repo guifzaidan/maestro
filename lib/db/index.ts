@@ -120,6 +120,7 @@ export function ensureSchema() {
         "ALTER TABLE tasks ADD COLUMN source_pk TEXT",
         "ALTER TABLE tasks ADD COLUMN source_recurring TEXT",
         "ALTER TABLE tasks ADD COLUMN groups TEXT",
+        "ALTER TABLE tasks ADD COLUMN flags TEXT",
         "ALTER TABLE branches ADD COLUMN claude_token TEXT",
         // Renomeia workspace → branch_id (padroniza a referência à branch).
         "ALTER TABLE tasks RENAME COLUMN workspace TO branch_id",

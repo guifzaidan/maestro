@@ -33,6 +33,7 @@ export const tasks = sqliteTable("tasks", {
   tools:            text("tools"),
   instruction:      text("instruction"),
   groups:           text("groups"),
+  flags:            text("flags"),
   createdAt:        integer("created_at").notNull(),
   sourceConnection: text("source_connection"),
   sourceTable:      text("source_table"),

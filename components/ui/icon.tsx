@@ -63,6 +63,7 @@ import {
   Eye,
   Loader2,
   Inbox,
+  Ban,
   type LucideIcon,
 
 } from "lucide-react";
@@ -172,6 +173,7 @@ const REGISTRY: Record<string, LucideIcon> = {
   Eye,
   Loader: Loader2,
   Inbox,
+  Ban,
 };
 
 export function Icon({
