@@ -11,6 +11,8 @@ export interface Task {
   due?: string;
   description?: string;
   recurring?: boolean;
+  /** Grupos/categorias (projeto, cliente, área). Ex: "Decentral", "Casa". */
+  groups?: string[];
 }
 
 export const TASK_LISTS: { id: TaskList; label: string; short: string; weekend: boolean }[] = [

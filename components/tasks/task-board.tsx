@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { DatePicker } from "@/components/ui/date-picker";
 import { fetchRecurring, saveRecurring, removeRecurring, generateRecurring, type RecurringDTO, type Frequency } from "@/lib/recurring-client";
+import { fetchGroupMeta, saveGroupOrder, saveEmptyGroups, renameGroupRemote, type EmptyGroup } from "@/lib/task-groups-client";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { WorkspaceDot } from "@/components/shell/header";
@@ -15,7 +16,7 @@ import { useToast } from "@/components/ui/toast";
 import { TASK_LISTS, TODAY_LIST, type Task, type TaskList } from "@/lib/mock/tasks";
 import { cn } from "@/lib/utils";
 
-type View = "hoje" | "semana" | "mes" | "backlog";
+type View = "hoje" | "semana" | "mes" | "backlog" | "grupos";
 
 let _audioCtx: AudioContext | null = null;
 function getAudioCtx(): AudioContext {
@@ -79,12 +80,15 @@ interface DbTaskRow {
   done: boolean;
   due: string | null;
   instruction: string | null;
+  groups: string | null;
   sourceRecurring: string | null;
 }
 
 /** Mapeia uma linha do banco para o formato que a board usa. Sem dia → hoje. */
 function toBoardTask(row: DbTaskRow): Task {
   const list = (row.list && VALID_LISTS.includes(row.list as TaskList) ? row.list : TODAY_LIST) as TaskList;
+  let groups: string[] = [];
+  if (row.groups) { try { groups = JSON.parse(row.groups) as string[]; } catch { groups = []; } }
   return {
     id: row.id,
     title: row.title,
@@ -94,6 +98,7 @@ function toBoardTask(row: DbTaskRow): Task {
     due: row.due ?? undefined,
     description: row.instruction ?? undefined,
     recurring: !!row.sourceRecurring,
+    groups,
   };
 }
 
@@ -101,6 +106,7 @@ const VIEWS: { id: View; label: string; icon: string }[] = [
   { id: "hoje",    label: "Hoje",    icon: "Clock" },
   { id: "semana",  label: "Semana",  icon: "CalendarRange" },
   { id: "mes",     label: "Mês",     icon: "Grid3x3" },
+  { id: "grupos",  label: "Grupos",  icon: "Layers" },
   { id: "backlog", label: "Backlog", icon: "Inbox" },
 ];
 
@@ -118,6 +124,12 @@ export function TaskBoard() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; title: string } | null>(null);
   const [editTarget, setEditTarget] = useState<Task | null>(null);
   const [recurringOpen, setRecurringOpen] = useState(false);
+  const [emptyGroups, setEmptyGroups] = useState<EmptyGroup[]>([]);
+  const [groupOrder, setGroupOrder] = useState<string[]>([]);
+
+  useEffect(() => {
+    fetchGroupMeta().then((meta) => { setEmptyGroups(meta.empty); setGroupOrder(meta.order); });
+  }, []);
 
   // Materializa as recorrentes vencidas hoje e recarrega as tasks.
   const loadTasks = useCallback(async () => {
@@ -189,24 +201,24 @@ export function TaskBoard() {
     toast("Tarefa atualizada", "edit");
   };
 
-  const saveTaskEdit = (id: string, fields: { title: string; due?: string; description?: string; branch?: string }) => {
+  const saveTaskEdit = (id: string, fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[] }) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...fields } : t)));
     setEditTarget(null);
     fetch("/api/tasks", {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ id, title: fields.title, due: fields.due ?? null, instruction: fields.description ?? null, branch: fields.branch ?? null }),
+      body: JSON.stringify({ id, title: fields.title, due: fields.due ?? null, instruction: fields.description ?? null, branch: fields.branch ?? null, groups: fields.groups ?? [] }),
     }).catch(() => {});
     toast("Tarefa atualizada", "edit");
   };
 
-  const addTask = async (list: TaskList, title: string, due: string) => {
+  const addTask = async (list: TaskList, title: string, due: string, groups?: string[]) => {
     const trimmed = title.trim();
     if (!trimmed) return;
 
     // Otimista: mostra a task na hora com id temporário, reconcilia depois.
     const tempId = `temp-${crypto.randomUUID()}`;
-    const optimistic: Task = { id: tempId, title: trimmed, branch: active, list, done: false, due };
+    const optimistic: Task = { id: tempId, title: trimmed, branch: active, list, done: false, due, groups: groups ?? [] };
     setTasks((prev) => [...prev, optimistic]);
     toast("Tarefa criada", "create");
 
@@ -214,7 +226,7 @@ export function TaskBoard() {
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: trimmed, branch: active, list, due }),
+        body: JSON.stringify({ title: trimmed, branch: active, list, due, groups: groups ?? [] }),
       });
       const data = await res.json();
       if (data.task) {
@@ -229,7 +241,69 @@ export function TaskBoard() {
     }
   };
 
+  // Move uma task pro dia de outra coluna (drag and drop na aba Grupos) — só muda o `due`.
+  const moveTaskToDay = (id: string, due: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, due } : t)));
+    fetch("/api/tasks", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, due }),
+    }).catch(() => {});
+  };
+
+  // Cria um grupo vazio direto na aba Grupos (sem task ainda associada).
+  const createEmptyGroup = (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    if (allGroups.some((g) => g.toLowerCase() === trimmed.toLowerCase())) return;
+    const branchTag = allBranches ? null : active;
+    setEmptyGroups((prev) => {
+      const next: EmptyGroup[] = [...prev, { name: trimmed, branch: branchTag }];
+      saveEmptyGroups(next);
+      return next;
+    });
+    setGroupOrder((prev) => {
+      const next = [...prev, trimmed];
+      saveGroupOrder(next);
+      return next;
+    });
+  };
+
+  // Renomeia um grupo em todo lugar (tasks, grupos vazios, ordem).
+  const renameGroup = (oldName: string, newName: string) => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === oldName) return;
+    setTasks((prev) => prev.map((t) => (t.groups?.includes(oldName) ? { ...t, groups: t.groups.map((g) => (g === oldName ? trimmed : g)) } : t)));
+    setEmptyGroups((prev) => prev.map((e) => (e.name === oldName ? { ...e, name: trimmed } : e)));
+    setGroupOrder((prev) => prev.map((g) => (g === oldName ? trimmed : g)));
+    renameGroupRemote(oldName, trimmed); // persiste tasks + ordem + vazios no servidor
+    toast("Grupo renomeado", "edit");
+  };
+
+  const reorderGroups = (order: string[]) => {
+    setGroupOrder(order);
+    saveGroupOrder(order);
+  };
+
   const visible = allBranches ? tasks : tasks.filter((t) => t.branch === active);
+
+  // Grupos existentes (do escopo visível) — pro autocomplete e pra aba Grupos.
+  // Inclui grupos "vazios" criados direto na aba Grupos (respeitando o escopo de branch)
+  // e aplica a ordem personalizada (drag reorder); grupos sem posição salva vão pro fim, alfabético.
+  const allGroups = useMemo(() => {
+    const set = new Set<string>();
+    visible.forEach((t) => t.groups?.forEach((g) => set.add(g)));
+    emptyGroups.forEach((e) => {
+      if (allBranches || e.branch === null || e.branch === active) set.add(e.name);
+    });
+    const orderIndex = new Map(groupOrder.map((g, i) => [g, i]));
+    return [...set].sort((a, b) => {
+      const ia = orderIndex.has(a) ? orderIndex.get(a)! : Infinity;
+      const ib = orderIndex.has(b) ? orderIndex.get(b)! : Infinity;
+      if (ia !== ib) return ia - ib;
+      return a.localeCompare(b, "pt-BR");
+    });
+  }, [visible, emptyGroups, groupOrder, allBranches, active]);
 
   return (
     <PageTransition>
@@ -299,6 +373,7 @@ export function TaskBoard() {
         {editTarget && (
           <EditTaskModal
             task={editTarget}
+            allGroups={allGroups}
             onSave={(fields) => saveTaskEdit(editTarget.id, fields)}
             onCancel={() => setEditTarget(null)}
             onDelete={() => requestDelete(editTarget.id, editTarget.title)}
@@ -331,6 +406,21 @@ export function TaskBoard() {
         {!loading && view === "mes" && (
           <motion.div key="mes" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
             <MesView tasks={visible} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
+          </motion.div>
+        )}
+        {!loading && view === "grupos" && (
+          <motion.div key="grupos" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
+            <GruposView
+              tasks={visible}
+              groups={allGroups}
+              onToggle={toggle}
+              onOpenEdit={setEditTarget}
+              onMoveTask={moveTaskToDay}
+              onRenameGroup={renameGroup}
+              onReorderGroups={reorderGroups}
+              onCreateGroup={createEmptyGroup}
+              onAddTask={(list, due, groupName, title) => addTask(list, title, due, [groupName])}
+            />
           </motion.div>
         )}
       </AnimatePresence>
@@ -1054,15 +1144,17 @@ function RecurringModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-function EditTaskModal({ task, onSave, onCancel, onDelete }: {
+function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
   task: Task;
-  onSave: (fields: { title: string; due?: string; description?: string; branch?: string }) => void;
+  allGroups: string[];
+  onSave: (fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[] }) => void;
   onCancel: () => void;
   onDelete: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [due, setDue] = useState(task.due ?? "");
   const [description, setDescription] = useState(task.description ?? "");
+  const [groups, setGroups] = useState<string[]>(task.groups ?? []);
   const { branches } = useWorkspace();
   const [branch, setBranch] = useState<string>(task.branch);
   const [calOpen, setCalOpen] = useState(false);
@@ -1091,7 +1183,7 @@ function EditTaskModal({ task, onSave, onCancel, onDelete }: {
   const handleSave = () => {
     const trimmed = title.trim();
     if (!trimmed) return;
-    onSave({ title: trimmed, due: due || undefined, description: description || undefined, branch });
+    onSave({ title: trimmed, due: due || undefined, description: description || undefined, branch, groups });
   };
 
   return (
@@ -1223,6 +1315,12 @@ function EditTaskModal({ task, onSave, onCancel, onDelete }: {
                 </motion.div>
               )}
             </AnimatePresence>
+          </div>
+
+          {/* Grupos */}
+          <div>
+            <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-widest text-white/40">Grupos</label>
+            <GroupChipInput groups={groups} onChange={setGroups} suggestions={allGroups} />
           </div>
 
           {/* Descrição */}
@@ -1482,6 +1580,14 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         {task.recurring && (
           <Icon name="RefreshCcw" size={11} strokeWidth={2} className="shrink-0 text-muted-2" />
         )}
+        {task.groups && task.groups.length > 0 && (
+          <span className="flex shrink-0 items-center gap-1">
+            {task.groups.slice(0, 2).map((g) => (
+              <span key={g} className="rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-medium text-white/45">{g}</span>
+            ))}
+            {task.groups.length > 2 && <span className="text-[9px] text-white/35">+{task.groups.length - 2}</span>}
+          </span>
+        )}
       </span>
 
       {showBranch && <BranchChip task={task} />}
@@ -1498,5 +1604,425 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         )}
       </div>
     </motion.div>
+  );
+}
+
+/* ── Input de grupos (chips + autocomplete) ─────────────────────── */
+function GroupChipInput({ groups, onChange, suggestions }: {
+  groups: string[];
+  onChange: (g: string[]) => void;
+  suggestions: string[];
+}) {
+  const [input, setInput] = useState("");
+  const add = (raw: string) => {
+    const v = raw.trim();
+    setInput("");
+    if (!v || groups.some((x) => x.toLowerCase() === v.toLowerCase())) return;
+    onChange([...groups, v]);
+  };
+  const remove = (g: string) => onChange(groups.filter((x) => x !== g));
+  const q = input.trim().toLowerCase();
+  const filtered = suggestions
+    .filter((s) => !groups.some((g) => g.toLowerCase() === s.toLowerCase()) && s.toLowerCase().includes(q))
+    .slice(0, 6);
+  const exactExists = suggestions.some((s) => s.toLowerCase() === q) || groups.some((g) => g.toLowerCase() === q);
+
+  return (
+    <div className="rounded-xl px-2.5 py-2" style={FIELD_STYLE}>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {groups.map((g) => (
+          <span key={g} className="flex items-center gap-1 rounded-full bg-white/[0.10] px-2 py-0.5 text-[11px] text-white/80">
+            {g}
+            <button type="button" onClick={() => remove(g)} className="cursor-pointer text-white/40 transition-colors hover:text-white">
+              <Icon name="X" size={10} strokeWidth={2.5} />
+            </button>
+          </span>
+        ))}
+        <input
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); add(input); }
+            if (e.key === "Backspace" && !input && groups.length) remove(groups[groups.length - 1]);
+          }}
+          placeholder={groups.length ? "adicionar…" : "ex: Decentral, Brand Sheep, Casa…"}
+          className="min-w-[90px] flex-1 bg-transparent text-[13px] text-white/90 outline-none placeholder:text-white/25"
+        />
+      </div>
+      {q && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {filtered.map((s) => (
+            <button key={s} type="button" onClick={() => add(s)} className="cursor-pointer rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-white/50 transition-colors hover:border-white/25 hover:text-white/80">
+              {s}
+            </button>
+          ))}
+          {!exactExists && (
+            <button type="button" onClick={() => add(input)} className="cursor-pointer rounded-full border border-dashed border-white/15 px-2 py-0.5 text-[11px] text-white/50 transition-colors hover:text-white/80">
+              + criar “{input.trim()}”
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ── Grupos ──────────────────────────────────────────────────────
+   Lista os grupos do escopo (respeita o filtro de branch). Clicar num grupo
+   expande a semana (Seg–Dom, navegável) com as tarefas daquele grupo por dia. */
+function mondayOfWeek(offsetWeeks: number): Date {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7) + offsetWeeks * 7);
+  return d;
+}
+
+/** Segunda-feira da semana que contém `d`. */
+function mondayOfDate(d: Date): Date {
+  const x = new Date(d);
+  x.setHours(0, 0, 0, 0);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+
+function GruposView({ tasks, groups, onToggle, onOpenEdit, onMoveTask, onRenameGroup, onReorderGroups, onCreateGroup, onAddTask }: {
+  tasks: Task[];
+  groups: string[];
+  onToggle: (id: string) => void;
+  onOpenEdit: (task: Task) => void;
+  onMoveTask: (id: string, due: string) => void;
+  onRenameGroup: (oldName: string, newName: string) => void;
+  onReorderGroups: (order: string[]) => void;
+  onCreateGroup: (name: string) => void;
+  onAddTask: (list: TaskList, due: string, group: string, title: string) => void;
+}) {
+  const [weekOffset, setWeekOffset] = useState(0);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [jumpOpen, setJumpOpen] = useState(false);
+  const [dragTaskId, setDragTaskId] = useState<string | null>(null);
+  const [dragOverDay, setDragOverDay] = useState<string | null>(null);
+  const [dragGroup, setDragGroup] = useState<string | null>(null);
+  const [dragOverGroup, setDragOverGroup] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [newGroupDraft, setNewGroupDraft] = useState<string | null>(null);
+  const jumpRef = useRef<HTMLDivElement>(null);
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFired = useRef(false);
+
+  useEffect(() => {
+    if (!jumpOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (jumpRef.current && !jumpRef.current.contains(e.target as Node)) setJumpOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [jumpOpen]);
+
+  const monday = mondayOfWeek(weekOffset);
+  const weekDays = TASK_LISTS.map((w, i) => {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    return { short: w.short, dateStr: fmtDate(d), dayNum: d.getDate(), month: d.getMonth() + 1, isToday: d.getTime() === todayMs(), list: w.id };
+  });
+  const weekStr = weekDays.map((d) => d.dateStr);
+  const isCurrentWeek = weekOffset === 0;
+  const rangeLabel = `${String(weekDays[0].dayNum).padStart(2, "0")}/${String(weekDays[0].month).padStart(2, "0")} – ${String(weekDays[6].dayNum).padStart(2, "0")}/${String(weekDays[6].month).padStart(2, "0")}`;
+
+  const toggleGroup = (g: string) => setExpanded((prev) => {
+    const next = new Set(prev);
+    if (next.has(g)) next.delete(g); else next.add(g);
+    return next;
+  });
+
+  const jumpToDate = (dateStr: string) => {
+    const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(dateStr);
+    if (!m) return;
+    const picked = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]));
+    const diffDays = Math.round((mondayOfDate(picked).getTime() - mondayOfDate(new Date()).getTime()) / 86400000);
+    setWeekOffset(Math.round(diffDays / 7));
+    setJumpOpen(false);
+  };
+
+  const startRename = (g: string) => { setRenaming(g); setRenameDraft(g); };
+  const commitRename = () => {
+    if (renaming) onRenameGroup(renaming, renameDraft);
+    setRenaming(null);
+  };
+
+  // Toque e segure = alternativa ao duplo clique pra renomear no mobile.
+  const cancelLongPress = () => {
+    if (longPressTimer.current) { clearTimeout(longPressTimer.current); longPressTimer.current = null; }
+  };
+  const handleTouchStart = (g: string) => {
+    longPressFired.current = false;
+    cancelLongPress();
+    longPressTimer.current = setTimeout(() => { longPressFired.current = true; startRename(g); }, 500);
+  };
+  const handleNameClick = (e: React.MouseEvent) => {
+    if (longPressFired.current) { e.preventDefault(); e.stopPropagation(); longPressFired.current = false; }
+  };
+
+  // Drag reorder dos grupos (cards inteiros).
+  const handleGroupDrop = (target: string) => {
+    if (!dragGroup || dragGroup === target) { setDragGroup(null); setDragOverGroup(null); return; }
+    const next = groups.filter((g) => g !== dragGroup);
+    const idx = next.indexOf(target);
+    next.splice(idx, 0, dragGroup);
+    onReorderGroups(next);
+    setDragGroup(null);
+    setDragOverGroup(null);
+  };
+
+  const submitNewGroup = () => {
+    if (newGroupDraft && newGroupDraft.trim()) onCreateGroup(newGroupDraft);
+    setNewGroupDraft(null);
+  };
+
+  return (
+    <div>
+      {/* Navegador de semana */}
+      <div className="relative mb-5 flex items-center justify-center gap-2" ref={jumpRef}>
+        <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setWeekOffset((w) => w - 1)}
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-white/[0.05] hover:text-white">
+          <Icon name="ChevronRight" size={14} strokeWidth={2} className="rotate-180" />
+        </motion.button>
+        <button
+          onClick={() => setJumpOpen((o) => !o)}
+          className="min-w-[110px] rounded-lg px-2 py-1 text-center text-[13px] font-medium text-white/80 transition-colors hover:bg-white/[0.05] hover:text-white"
+        >
+          {rangeLabel}
+        </button>
+        <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }} onClick={() => setWeekOffset((w) => w + 1)}
+          className="flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-colors hover:bg-white/[0.05] hover:text-white">
+          <Icon name="ChevronRight" size={14} strokeWidth={2} />
+        </motion.button>
+        <AnimatePresence>
+          {!isCurrentWeek && (
+            <motion.button initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.9 }}
+              onClick={() => setWeekOffset(0)}
+              className="rounded-full border border-[var(--border)] bg-[var(--surface)] px-2.5 py-1 text-[11px] text-muted transition-colors hover:text-white">
+              Esta semana
+            </motion.button>
+          )}
+        </AnimatePresence>
+
+        <AnimatePresence>
+          {jumpOpen && (
+            <motion.div
+              initial={{ opacity: 0, y: -6, scale: 0.97 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -6, scale: 0.97 }}
+              transition={{ duration: 0.16 }}
+              className="absolute left-1/2 top-full z-20 mt-2 -translate-x-1/2 rounded-xl p-3"
+              style={{ background: "rgba(20,20,22,0.98)", border: "1px solid rgba(255,255,255,0.12)", boxShadow: "0 24px 60px -12px rgba(0,0,0,0.85)" }}
+            >
+              <DatePicker value={weekStr[0]} onChange={jumpToDate} onClose={() => setJumpOpen(false)} />
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {groups.length === 0 && newGroupDraft === null ? (
+        <p className="py-10 text-center text-sm text-muted-2">
+          Nenhum grupo ainda. Abra uma tarefa (clique nela) e adicione grupos no campo “Grupos”, ou crie um abaixo.
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {groups.map((g) => {
+            const groupTasks = tasks.filter((t) => t.groups?.includes(g));
+            const weekTasks = groupTasks.filter((t) => t.due && weekStr.includes(t.due));
+            const isOpen = expanded.has(g);
+            return (
+              <div
+                key={g}
+                draggable={renaming !== g}
+                onDragStart={() => setDragGroup(g)}
+                onDragOver={(e) => { e.preventDefault(); if (dragGroup && dragGroup !== g) setDragOverGroup(g); }}
+                onDragLeave={() => setDragOverGroup((cur) => (cur === g ? null : cur))}
+                onDrop={(e) => { e.preventDefault(); handleGroupDrop(g); }}
+                onDragEnd={() => { setDragGroup(null); setDragOverGroup(null); }}
+                className={cn(
+                  "rounded-xl border transition-colors",
+                  dragOverGroup === g ? "border-white/40 bg-white/[0.03]" : "border-[var(--border)]",
+                  dragGroup === g && "opacity-40"
+                )}
+              >
+                <div className="flex w-full cursor-grab items-center gap-2 px-4 py-3 active:cursor-grabbing">
+                  <button onClick={() => toggleGroup(g)} className="flex flex-1 cursor-pointer items-center gap-2.5 text-left">
+                    <motion.span animate={{ rotate: isOpen ? 0 : -90 }} transition={{ duration: 0.18 }} className="shrink-0 text-muted-2">
+                      <Icon name="ChevronDown" size={14} strokeWidth={2} />
+                    </motion.span>
+                    {renaming === g ? (
+                      <input
+                        autoFocus
+                        value={renameDraft}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => setRenameDraft(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); commitRename(); } if (e.key === "Escape") setRenaming(null); }}
+                        onBlur={commitRename}
+                        className="rounded-md bg-white/10 px-1.5 py-0.5 text-[14px] font-medium text-white outline-none"
+                      />
+                    ) : (
+                      <span
+                        onDoubleClick={(e) => { e.stopPropagation(); startRename(g); }}
+                        onTouchStart={() => handleTouchStart(g)}
+                        onTouchEnd={cancelLongPress}
+                        onTouchMove={cancelLongPress}
+                        onTouchCancel={cancelLongPress}
+                        onClickCapture={handleNameClick}
+                        onContextMenu={(e) => e.preventDefault()}
+                        title="Duplo clique (ou toque e segure no celular) para renomear"
+                        className="text-[14px] font-medium text-white/90"
+                        style={{ WebkitTouchCallout: "none", WebkitUserSelect: "none", userSelect: "none" }}
+                      >
+                        {g}
+                      </span>
+                    )}
+                    <span className={cn(
+                      "rounded-full px-1.5 py-0.5 text-[10px] tabular-nums",
+                      weekTasks.length ? "bg-white/10 text-white/60" : "bg-white/[0.04] text-muted-2"
+                    )}>
+                      {weekTasks.length} esta semana
+                    </span>
+                    <span className="flex-1" />
+                    <span className="text-[11px] text-muted-2">{groupTasks.length} no total</span>
+                  </button>
+                </div>
+
+                <AnimatePresence initial={false}>
+                  {isOpen && (
+                    <motion.div key="week"
+                      initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                      transition={{ type: "spring", stiffness: 340, damping: 32 }} style={{ overflow: "hidden" }}>
+                      <div className="grid grid-cols-1 gap-2 border-t border-[var(--border)] p-3 sm:grid-cols-7">
+                        {weekDays.map((day) => {
+                          const dayTasks = weekTasks.filter((t) => t.due === day.dateStr);
+                          const cellKey = `${g}:${day.dateStr}`;
+                          const isDragOver = dragOverDay === cellKey;
+                          return (
+                            <div
+                              key={day.dateStr}
+                              onDragOver={(e) => { e.preventDefault(); setDragOverDay(cellKey); }}
+                              onDragLeave={() => setDragOverDay((cur) => (cur === cellKey ? null : cur))}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setDragOverDay(null);
+                                if (dragTaskId) onMoveTask(dragTaskId, day.dateStr);
+                                setDragTaskId(null);
+                              }}
+                              className={cn(
+                                "rounded-lg p-2 transition-colors",
+                                isDragOver ? "bg-white/[0.10] ring-1 ring-white/25" : day.isToday ? "bg-white/[0.05]" : "bg-white/[0.02]"
+                              )}
+                            >
+                              <div className="mb-1.5 flex items-center justify-between">
+                                <span className={cn("text-[10px] font-semibold uppercase tracking-wider", day.isToday ? "text-white" : "text-muted-2")}>{day.short}</span>
+                                <span className={cn("text-[10px] tabular-nums", day.isToday ? "text-white/70" : "text-muted-2")}>{day.dayNum}</span>
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                {dayTasks.map((t) => (
+                                  <div
+                                    key={t.id}
+                                    draggable
+                                    onDragStart={(e) => { setDragTaskId(t.id); e.dataTransfer.effectAllowed = "move"; }}
+                                    onDragEnd={() => setDragTaskId(null)}
+                                    onClick={() => onOpenEdit(t)}
+                                    className={cn(
+                                      "flex cursor-grab items-start gap-1.5 rounded px-1 py-0.5 transition-colors hover:bg-white/[0.05] active:cursor-grabbing",
+                                      dragTaskId === t.id && "opacity-30"
+                                    )}
+                                  >
+                                    <span onClick={(e) => { e.stopPropagation(); onToggle(t.id); }}
+                                      className="mt-[3px] flex h-3 w-3 shrink-0 items-center justify-center rounded-full border border-[var(--border-strong)]"
+                                      style={{ background: t.done ? getWorkspace(t.branch).accent : "transparent" }}>
+                                      {t.done && <Icon name="Check" size={8} strokeWidth={3} className="text-white" />}
+                                    </span>
+                                    <span className={cn("text-[11px] leading-snug", t.done ? "text-muted-2 line-through" : "text-white/75")}>{t.title}</span>
+                                  </div>
+                                ))}
+                                {dayTasks.length === 0 && !isDragOver && (
+                                  <p className="text-[11px] text-muted-2/40">—</p>
+                                )}
+                              </div>
+                              <GroupDayAddRow onAdd={(title) => onAddTask(day.list, day.dateStr, g, title)} />
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
+
+          {/* Criar novo grupo */}
+          {newGroupDraft !== null ? (
+            <div className="flex items-center gap-2 rounded-xl px-4 py-2.5" style={FIELD_STYLE}>
+              <Icon name="Layers" size={13} strokeWidth={1.75} className="shrink-0 text-muted-2" />
+              <input
+                autoFocus
+                value={newGroupDraft}
+                onChange={(e) => setNewGroupDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); submitNewGroup(); } if (e.key === "Escape") setNewGroupDraft(null); }}
+                onBlur={submitNewGroup}
+                placeholder="Nome do novo grupo…"
+                className="flex-1 bg-transparent text-[13px] text-white/90 outline-none placeholder:text-white/25"
+              />
+            </div>
+          ) : (
+            <motion.button
+              whileHover={{ x: 2 }}
+              onClick={() => setNewGroupDraft("")}
+              className="mt-1 flex cursor-pointer items-center gap-2 rounded-lg px-1 py-1.5 text-[12px] text-muted-2 transition-colors hover:text-muted"
+            >
+              <Icon name="Plus" size={13} strokeWidth={2} />
+              Novo grupo
+            </motion.button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Linha compacta pra adicionar task direto num dia dentro de um grupo. */
+function GroupDayAddRow({ onAdd }: { onAdd: (title: string) => void }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const submit = () => {
+    const t = draft.trim();
+    if (t) onAdd(t);
+    setDraft("");
+    setAdding(false);
+  };
+
+  if (!adding) {
+    return (
+      <button
+        onClick={() => setAdding(true)}
+        className="mt-1 flex w-full cursor-pointer items-center gap-1 rounded px-1 py-0.5 text-[10px] text-muted-2/60 transition-colors hover:text-muted-2"
+      >
+        <Icon name="Plus" size={10} strokeWidth={2} />
+        adicionar
+      </button>
+    );
+  }
+
+  return (
+    <input
+      autoFocus
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") { e.preventDefault(); submit(); }
+        if (e.key === "Escape") { setDraft(""); setAdding(false); }
+      }}
+      onBlur={submit}
+      placeholder="Nova tarefa…"
+      className="mt-1 w-full rounded bg-white/[0.06] px-1 py-0.5 text-[11px] text-white/85 outline-none placeholder:text-white/25"
+    />
   );
 }

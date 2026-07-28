@@ -32,11 +32,23 @@ export const tasks = sqliteTable("tasks", {
   due:              text("due"),
   tools:            text("tools"),
   instruction:      text("instruction"),
+  groups:           text("groups"),
   createdAt:        integer("created_at").notNull(),
   sourceConnection: text("source_connection"),
   sourceTable:      text("source_table"),
   sourcePk:         text("source_pk"),
   sourceRecurring:  text("source_recurring"),
+});
+
+/**
+ * Chave-valor genérico do app. Guarda JSON não-crítico e de instância única:
+ * ordem personalizada dos grupos (`group-order`) e grupos vazios criados na UI
+ * (`empty-groups`). Fonte de verdade dessas metainformações de grupos.
+ */
+export const appState = sqliteTable("app_state", {
+  key:       text("key").primaryKey(),
+  value:     text("value").notNull(),
+  updatedAt: integer("updated_at").notNull(),
 });
 
 /** Uma execução/conversa do maestro. */
@@ -114,6 +126,7 @@ export type AgentRun     = typeof agentRuns.$inferSelect;
 export type Message      = typeof messages.$inferSelect;
 export type Connection   = typeof connections.$inferSelect;
 export type NewConnection = typeof connections.$inferInsert;
+export type AppState     = typeof appState.$inferSelect;
 export type Usage        = typeof usage.$inferSelect;
 export type NewUsage     = typeof usage.$inferInsert;
 export type RecurringTask    = typeof recurringTasks.$inferSelect;

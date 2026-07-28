@@ -9,6 +9,7 @@ export interface CreateTaskInput {
   due?: string | null;
   tools?: string[] | null;
   instruction?: string | null;
+  groups?: string[] | null;
   sourceRecurring?: string | null;
 }
 
@@ -28,6 +29,7 @@ export async function createTask(input: CreateTaskInput): Promise<Task> {
     due: input.due ?? null,
     tools: input.tools ? JSON.stringify(input.tools) : null,
     instruction: input.instruction ?? null,
+    groups: input.groups && input.groups.length ? JSON.stringify(input.groups) : null,
     createdAt: Date.now(),
     sourceRecurring: input.sourceRecurring ?? null,
   };
@@ -42,10 +44,13 @@ export async function toggleTask(id: string, done: boolean): Promise<void> {
 
 export async function updateTask(
   id: string,
-  fields: { title?: string; due?: string | null; instruction?: string | null; branch?: string },
+  fields: { title?: string; due?: string | null; instruction?: string | null; branch?: string; groups?: string[] | null },
 ): Promise<void> {
   await ensureSchema();
-  await db.update(tasks).set(fields).where(eq(tasks.id, id));
+  const { groups, ...rest } = fields;
+  const set: Record<string, unknown> = { ...rest };
+  if (groups !== undefined) set.groups = groups && groups.length ? JSON.stringify(groups) : null;
+  await db.update(tasks).set(set).where(eq(tasks.id, id));
 }
 
 export async function deleteTask(id: string): Promise<void> {
