@@ -532,6 +532,14 @@ function AddRow({ onAdd }: { onAdd: (title: string) => void }) {
   );
 }
 
+/** Ordena colocando as tasks com flag "urgente" no topo (sort estável — mantém
+    a ordem original entre as demais). Aplicado por seção/dia. */
+function sortUrgentFirst(list: Task[]): Task[] {
+  return [...list].sort(
+    (a, b) => Number(b.flags?.includes("urgente") ?? false) - Number(a.flags?.includes("urgente") ?? false),
+  );
+}
+
 /* ── Hoje ─────────────────────────────────────────────────────── */
 function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
   const done = tasks.filter((t) => t.done).length;
@@ -549,7 +557,7 @@ function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBr
           variants={{ show: { transition: { staggerChildren: 0.05 } } }}
           className="flex flex-col gap-1.5"
         >
-          {tasks.map((task) => (
+          {sortUrgentFirst(tasks).map((task) => (
             <motion.div key={task.id} variants={itemAnim} layout>
               <TaskRow task={task} onToggle={onToggle} onDelete={onDelete} onEdit={onEdit} onOpenEdit={onOpenEdit} showBranch={showBranch} />
             </motion.div>
@@ -857,7 +865,7 @@ function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBra
                 Dia {selected}
               </p>
               <div className="flex flex-col gap-1.5">
-                {selectedTasks.map((task) => (
+                {sortUrgentFirst(selectedTasks).map((task) => (
                   <TaskRow key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} onEdit={onEdit} onOpenEdit={onOpenEdit} showBranch={showBranch} />
                 ))}
                 {selectedTasks.length === 0 && (
@@ -900,7 +908,7 @@ function BacklogView({ tasks, onToggle, onDelete, onEdit, onOpenEdit, showBranch
           variants={{ show: { transition: { staggerChildren: 0.05 } } }}
           className="flex flex-col gap-1.5"
         >
-          {tasks.map((task) => (
+          {sortUrgentFirst(tasks).map((task) => (
             <motion.div key={task.id} variants={itemAnim} layout>
               <TaskRow task={task} onToggle={onToggle} onDelete={onDelete} onEdit={onEdit} onOpenEdit={onOpenEdit} showBranch={showBranch} />
             </motion.div>
@@ -996,7 +1004,7 @@ function DaySection({
                   variants={{ show: { transition: { staggerChildren: 0.04 } } }}
                   className="flex flex-col gap-1.5"
                 >
-                  {tasks.map((task) => (
+                  {sortUrgentFirst(tasks).map((task) => (
                     <motion.div key={task.id} variants={itemAnim} layout>
                       <TaskRow task={task} onToggle={onToggle} onDelete={onDelete} onEdit={onEdit} onOpenEdit={onOpenEdit} showBranch={showBranch} draggable={!!onMove} onMove={onMove} />
                     </motion.div>
@@ -2190,7 +2198,7 @@ function GruposView({ tasks, groups, onToggle, onOpenEdit, onMoveTask, onRenameG
                       transition={{ type: "spring", stiffness: 340, damping: 32 }} style={{ overflow: "hidden" }}>
                       <div className="grid grid-cols-1 gap-2 border-t border-[var(--border)] p-3 sm:grid-cols-7">
                         {weekDays.map((day) => {
-                          const dayTasks = weekTasks.filter((t) => t.due === day.dateStr);
+                          const dayTasks = sortUrgentFirst(weekTasks.filter((t) => t.due === day.dateStr));
                           const cellKey = `${g}:${day.dateStr}`;
                           const isDragOver = dragOverDay === cellKey;
                           return (
