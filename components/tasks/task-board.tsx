@@ -195,6 +195,60 @@ export function TaskBoard() {
 
   const requestDelete = (id: string, title: string) => setDeleteTarget({ id, title });
 
+  // Duplica uma task: cria uma cópia (mesmos campos) e reabre o editor nela.
+  const duplicateTask = async (src: Task) => {
+    setEditTarget(null);
+    const copyTitle = `Cópia - ${src.title}`;
+    const tempId = `temp-${crypto.randomUUID()}`;
+    const optimistic: Task = { ...src, id: tempId, title: copyTitle };
+    // Insere logo abaixo da original (em vez de no fim da lista).
+    setTasks((prev) => {
+      const idx = prev.findIndex((t) => t.id === src.id);
+      if (idx === -1) return [...prev, optimistic];
+      const next = [...prev];
+      next.splice(idx + 1, 0, optimistic);
+      return next;
+    });
+    toast("Tarefa duplicada", "create");
+    try {
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          title: copyTitle,
+          branch: src.branch,
+          list: src.list,
+          due: src.due ?? null,
+          instruction: src.description ?? null,
+          groups: src.groups ?? [],
+          flags: src.flags ?? [],
+        }),
+      });
+      const data = await res.json();
+      if (data.task) {
+        const nt = toBoardTask(data.task);
+        setTasks((prev) => prev.map((t) => (t.id === tempId ? nt : t)));
+        setEditTarget(nt); // reabre no duplicado pra ajustar
+      } else {
+        setTasks((prev) => prev.filter((t) => t.id !== tempId));
+      }
+    } catch {
+      setTasks((prev) => prev.filter((t) => t.id !== tempId));
+    }
+  };
+
+  // Duplicar disparado pelo botão da linha (evento, evita threading por todas as views).
+  const duplicateRef = useRef(duplicateTask);
+  duplicateRef.current = duplicateTask;
+  useEffect(() => {
+    const onDup = (e: Event) => {
+      const task = (e as CustomEvent<{ task: Task }>).detail?.task;
+      if (task) duplicateRef.current(task);
+    };
+    window.addEventListener("maestro:task-duplicate", onDup as EventListener);
+    return () => window.removeEventListener("maestro:task-duplicate", onDup as EventListener);
+  }, []);
+
   const editTask = (id: string, title: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
     fetch("/api/tasks", {
@@ -376,11 +430,13 @@ export function TaskBoard() {
       <AnimatePresence>
         {editTarget && (
           <EditTaskModal
+            key={editTarget.id}
             task={editTarget}
             allGroups={allGroups}
             onSave={(fields) => saveTaskEdit(editTarget.id, fields)}
             onCancel={() => setEditTarget(null)}
             onDelete={() => requestDelete(editTarget.id, editTarget.title)}
+            onDuplicate={() => duplicateTask(editTarget)}
           />
         )}
       </AnimatePresence>
@@ -399,7 +455,7 @@ export function TaskBoard() {
         )}
         {!loading && view === "semana" && (
           <motion.div key="semana" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
-            <SemanaView tasks={visible} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
+            <SemanaView tasks={visible} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} onMove={moveTaskToDay} showBranch={allBranches} />
           </motion.div>
         )}
         {!loading && view === "backlog" && (
@@ -506,7 +562,7 @@ function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBr
 }
 
 /* ── Semana ───────────────────────────────────────────────────── */
-function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
+function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, onMove, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; onMove: (id: string, due: string) => void; showBranch: boolean }) {
   return (
     <div className="flex flex-col">
       {TASK_LISTS.map((list, colIdx) => {
@@ -525,6 +581,7 @@ function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, show
             onDelete={onDelete}
             onEdit={onEdit}
             onOpenEdit={onOpenEdit}
+            onMove={onMove}
             colIdx={colIdx}
             showBranch={showBranch}
           />
@@ -856,22 +913,40 @@ function BacklogView({ tasks, onToggle, onDelete, onEdit, onOpenEdit, showBranch
 
 /* ── Shared components ────────────────────────────────────────── */
 function DaySection({
-  list, label, isToday, tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, colIdx, showBranch,
+  list, label, isToday, tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, onMove, colIdx, showBranch,
 }: {
   list: TaskList; label: string; isToday: boolean;
   tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void;
   onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void;
-  onOpenEdit: (task: Task) => void; colIdx: number; showBranch: boolean;
+  onOpenEdit: (task: Task) => void; onMove?: (id: string, due: string) => void; colIdx: number; showBranch: boolean;
 }) {
   const [expanded, setExpanded] = useState(true);
+  const [isOver, setIsOver] = useState(false);
   const done = tasks.filter((t) => t.done).length;
+  const colDue = fmtDate(dateForList(list));
+
+  const dropHandlers = onMove ? {
+    onDragOver: (e: React.DragEvent) => { e.preventDefault(); e.dataTransfer.dropEffect = "move"; if (!isOver) setIsOver(true); },
+    onDragLeave: (e: React.DragEvent) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setIsOver(false); },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      setIsOver(false);
+      const id = e.dataTransfer.getData("text/task-id");
+      if (id) onMove(id, colDue);
+    },
+  } : {};
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.25, delay: colIdx * 0.04, ease: [0.25, 0.46, 0.45, 0.94] }}
-      className="border-t border-[var(--border)]"
+      {...dropHandlers}
+      data-day-due={onMove ? colDue : undefined}
+      className={cn(
+        "border-t border-[var(--border)] transition-colors",
+        isOver && "rounded-lg bg-white/[0.05] ring-1 ring-inset ring-white/20"
+      )}
     >
       <button
         onClick={() => setExpanded((v) => !v)}
@@ -923,7 +998,7 @@ function DaySection({
                 >
                   {tasks.map((task) => (
                     <motion.div key={task.id} variants={itemAnim} layout>
-                      <TaskRow task={task} onToggle={onToggle} onDelete={onDelete} onEdit={onEdit} onOpenEdit={onOpenEdit} showBranch={showBranch} />
+                      <TaskRow task={task} onToggle={onToggle} onDelete={onDelete} onEdit={onEdit} onOpenEdit={onOpenEdit} showBranch={showBranch} draggable={!!onMove} onMove={onMove} />
                     </motion.div>
                   ))}
                 </motion.div>
@@ -1181,12 +1256,13 @@ function LinkifiedText({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
+function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicate }: {
   task: Task;
   allGroups: string[];
   onSave: (fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[]; flags?: string[] }) => void;
   onCancel: () => void;
   onDelete: () => void;
+  onDuplicate: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [due, setDue] = useState(task.due ?? "");
@@ -1200,6 +1276,9 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
   const [branchOpen, setBranchOpen] = useState(false);
   const calRef = useRef<HTMLDivElement>(null);
   const branchRef = useRef<HTMLDivElement>(null);
+  // Só fecha se o clique COMEÇOU no backdrop (evita fechar ao selecionar texto
+  // e soltar o mouse fora do popup).
+  const downOnBackdrop = useRef(false);
 
   useEffect(() => {
     if (!calOpen) return;
@@ -1235,7 +1314,8 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
       transition={{ duration: 0.18 }}
       className="fixed inset-0 z-[100] flex items-center justify-center"
       style={{ background: "rgba(0,0,0,0.55)", backdropFilter: "blur(6px)", WebkitBackdropFilter: "blur(6px)" }}
-      onClick={onCancel}
+      onMouseDown={(e) => { downOnBackdrop.current = e.target === e.currentTarget; }}
+      onClick={(e) => { if (e.target === e.currentTarget && downOnBackdrop.current) onCancel(); }}
     >
       <motion.div
         initial={{ opacity: 0, scale: 0.94, y: 8 }}
@@ -1248,16 +1328,30 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete }: {
       >
         <div className="mb-5 flex items-center justify-between">
           <p className="text-[15px] font-semibold text-white">Editar tarefa</p>
-          <motion.button
-            whileHover={{ scale: 1.08, background: "rgba(239,68,68,0.18)" }}
-            whileTap={{ scale: 0.93 }}
-            onClick={onDelete}
-            className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl transition-colors"
-            style={{ background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.25)" }}
-            aria-label="Excluir tarefa"
-          >
-            <Icon name="Trash2" size={14} strokeWidth={1.75} style={{ color: "#f87171" }} />
-          </motion.button>
+          <div className="flex items-center gap-2">
+            <motion.button
+              whileHover={{ scale: 1.08, background: "rgba(255,255,255,0.10)" }}
+              whileTap={{ scale: 0.93 }}
+              onClick={onDuplicate}
+              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl transition-colors"
+              style={{ background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.12)" }}
+              aria-label="Duplicar tarefa"
+              title="Duplicar tarefa"
+            >
+              <Icon name="Copy" size={14} strokeWidth={1.75} className="text-white/70" />
+            </motion.button>
+            <motion.button
+              whileHover={{ scale: 1.08, background: "rgba(239,68,68,0.18)" }}
+              whileTap={{ scale: 0.93 }}
+              onClick={onDelete}
+              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl transition-colors"
+              style={{ background: "rgba(239,68,68,0.10)", border: "1px solid rgba(239,68,68,0.25)" }}
+              aria-label="Excluir tarefa"
+              title="Excluir tarefa"
+            >
+              <Icon name="Trash2" size={14} strokeWidth={1.75} style={{ color: "#f87171" }} />
+            </motion.button>
+          </div>
         </div>
 
         <div className="flex flex-col gap-3">
@@ -1605,21 +1699,114 @@ function BranchChip({ task }: { task: Task }) {
   );
 }
 
-function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
+function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch, draggable, onMove }: {
   task: Task;
   onToggle: (id: string) => void;
   onDelete?: (id: string, title: string) => void;
   onEdit?: (id: string, title: string) => void;
   onOpenEdit?: (task: Task) => void;
   showBranch?: boolean;
+  draggable?: boolean;
+  onMove?: (id: string, due: string) => void;
 }) {
   const ws = getWorkspace(task.branch);
+  const [dragging, setDragging] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const suppressClick = useRef(false);
+  const touch = useRef({
+    startX: 0, startY: 0, timer: null as ReturnType<typeof setTimeout> | null,
+    active: false, ghost: null as HTMLDivElement | null, target: null as Element | null,
+  });
+
+  // Drag por toque (mobile): segurar ~300ms ativa; arrastar sobre outro dia e soltar move.
+  // (A API HTML5 draggable/onDrop só funciona com mouse — no touch nada dispara.)
+  useEffect(() => {
+    if (!draggable || !onMove) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const move = onMove;
+    const st = touch.current;
+
+    const setHighlight = (next: Element | null) => {
+      if (st.target === next) return;
+      if (st.target) { (st.target as HTMLElement).style.background = ""; (st.target as HTMLElement).style.boxShadow = ""; }
+      if (next) { const n = next as HTMLElement; n.style.background = "rgba(255,255,255,0.05)"; n.style.boxShadow = "inset 0 0 0 1px rgba(255,255,255,0.2)"; }
+      st.target = next;
+    };
+    const removeGhost = () => { if (st.ghost) { st.ghost.remove(); st.ghost = null; } };
+    const end = (drop: boolean) => {
+      if (st.timer) { clearTimeout(st.timer); st.timer = null; }
+      if (!st.active) return;
+      if (drop && st.target) {
+        const due = (st.target as HTMLElement).getAttribute("data-day-due");
+        if (due) move(task.id, due);
+      }
+      setHighlight(null); removeGhost();
+      st.active = false; setDragging(false);
+      suppressClick.current = true;
+      setTimeout(() => { suppressClick.current = false; }, 400);
+    };
+
+    const onStart = (e: TouchEvent) => {
+      if (e.touches.length !== 1) return;
+      const t = e.touches[0];
+      st.startX = t.clientX; st.startY = t.clientY; st.active = false;
+      if (st.timer) clearTimeout(st.timer);
+      st.timer = setTimeout(() => {
+        st.active = true; setDragging(true);
+        const g = document.createElement("div");
+        g.textContent = task.title;
+        g.style.cssText = "position:fixed;z-index:300;pointer-events:none;max-width:72vw;padding:7px 11px;border-radius:10px;background:rgba(20,20,22,0.96);border:1px solid rgba(255,255,255,0.16);color:#fff;font-size:13px;line-height:1;box-shadow:0 14px 34px rgba(0,0,0,0.6);transform:translate(-50%,-150%);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;";
+        g.style.left = st.startX + "px"; g.style.top = st.startY + "px";
+        document.body.appendChild(g); st.ghost = g;
+        if (navigator.vibrate) { try { navigator.vibrate(12); } catch {} }
+      }, 300);
+    };
+    const onMoveT = (e: TouchEvent) => {
+      const t = e.touches[0]; if (!t) return;
+      if (!st.active) {
+        if (st.timer && (Math.abs(t.clientX - st.startX) > 10 || Math.abs(t.clientY - st.startY) > 10)) { clearTimeout(st.timer); st.timer = null; }
+        return;
+      }
+      e.preventDefault(); // impede o scroll da página durante o arraste
+      if (st.ghost) { st.ghost.style.left = t.clientX + "px"; st.ghost.style.top = t.clientY + "px"; }
+      const under = document.elementFromPoint(t.clientX, t.clientY);
+      setHighlight(under ? under.closest("[data-day-due]") : null);
+    };
+    const onEnd = () => end(true);
+    const onCancel = () => end(false);
+
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMoveT, { passive: false });
+    el.addEventListener("touchend", onEnd, { passive: true });
+    el.addEventListener("touchcancel", onCancel, { passive: true });
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMoveT);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onCancel);
+      if (st.timer) clearTimeout(st.timer);
+      removeGhost(); setHighlight(null);
+    };
+  }, [draggable, onMove, task.id, task.title]);
 
   return (
+    // Wrapper que carrega o drag: HTML5 (mouse) + touch (mobile), separado do motion.div.
+    <div
+      ref={rootRef}
+      draggable={draggable}
+      onDragStart={draggable ? (e) => {
+        e.dataTransfer.setData("text/task-id", task.id);
+        e.dataTransfer.effectAllowed = "move";
+        setDragging(true);
+      } : undefined}
+      onDragEnd={draggable ? () => setDragging(false) : undefined}
+      className={cn(dragging && "opacity-40")}
+    >
     <motion.div
       whileHover={{ x: 3 }}
       transition={{ duration: 0.12 }}
-      onClick={() => onOpenEdit?.(task)}
+      onClick={() => { if (suppressClick.current) return; onOpenEdit?.(task); }}
       className="group flex cursor-pointer items-center gap-3 rounded-lg py-2 pl-1 pr-3 transition-colors hover:bg-white/[0.03]"
     >
       <button
@@ -1690,6 +1877,14 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
       {showBranch && <BranchChip task={task} />}
 
       <div className="hidden sm:flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+        <button
+          onClick={(e) => { e.stopPropagation(); window.dispatchEvent(new CustomEvent("maestro:task-duplicate", { detail: { task } })); }}
+          className="cursor-pointer rounded p-1 text-white/40 transition-colors hover:text-white/80"
+          aria-label="Duplicar"
+          title="Duplicar tarefa"
+        >
+          <Icon name="Copy" size={12} strokeWidth={1.75} />
+        </button>
         {onDelete && (
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(task.id, task.title); }}
@@ -1701,6 +1896,7 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         )}
       </div>
     </motion.div>
+    </div>
   );
 }
 
