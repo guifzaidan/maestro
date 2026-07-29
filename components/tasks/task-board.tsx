@@ -1674,6 +1674,9 @@ function TaskRow({ task, onToggle, onDelete, onEdit, onOpenEdit, showBranch }: {
         {task.recurring && (
           <Icon name="RefreshCcw" size={11} strokeWidth={2} className="shrink-0 text-muted-2" />
         )}
+        {task.description && task.description.trim() && (
+          <Icon name="FileText" size={11} strokeWidth={1.75} className="shrink-0 text-muted-2/70" />
+        )}
         {task.groups && task.groups.length > 0 && (
           <span className="flex shrink-0 items-center gap-1">
             {task.groups.slice(0, 2).map((g) => (
