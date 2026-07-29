@@ -293,13 +293,13 @@ export function TaskBoard() {
     toast("Tarefa atualizada", "edit");
   };
 
-  const addTask = async (list: TaskList, title: string, due: string, groups?: string[]) => {
+  const addTask = async (list: TaskList, title: string, due: string, groups?: string[], flags?: string[]) => {
     const trimmed = title.trim();
     if (!trimmed) return;
 
     // Otimista: mostra a task na hora com id temporário, reconcilia depois.
     const tempId = `temp-${crypto.randomUUID()}`;
-    const optimistic: Task = { id: tempId, title: trimmed, branch: active, list, done: false, due, groups: groups ?? [] };
+    const optimistic: Task = { id: tempId, title: trimmed, branch: active, list, done: false, due, groups: groups ?? [], flags: flags ?? [] };
     setTasks((prev) => [...prev, optimistic]);
     toast("Tarefa criada", "create");
 
@@ -307,7 +307,7 @@ export function TaskBoard() {
       const res = await fetch("/api/tasks", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ title: trimmed, branch: active, list, due, groups: groups ?? [] }),
+        body: JSON.stringify({ title: trimmed, branch: active, list, due, groups: groups ?? [], flags: flags ?? [] }),
       });
       const data = await res.json();
       if (data.task) {
@@ -474,12 +474,12 @@ export function TaskBoard() {
       <AnimatePresence mode="wait">
         {!loading && view === "hoje" && (
           <motion.div key="hoje" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
-            <HojeView tasks={visible.filter(belongsToToday)} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
+            <HojeView tasks={visible.filter(belongsToToday)} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} allGroups={allGroups} />
           </motion.div>
         )}
         {!loading && view === "semana" && (
           <motion.div key="semana" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
-            <SemanaView tasks={visible} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} onMove={moveTaskToDay} showBranch={allBranches} />
+            <SemanaView tasks={visible} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} onMove={moveTaskToDay} showBranch={allBranches} allGroups={allGroups} />
           </motion.div>
         )}
         {!loading && view === "backlog" && (
@@ -489,7 +489,7 @@ export function TaskBoard() {
         )}
         {!loading && view === "mes" && (
           <motion.div key="mes" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: 0.2 }}>
-            <MesView tasks={visible} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} />
+            <MesView tasks={visible} onToggle={toggle} onAdd={addTask} onDelete={requestDelete} onEdit={editTask} onOpenEdit={setEditTarget} showBranch={allBranches} allGroups={allGroups} />
           </motion.div>
         )}
         {!loading && view === "grupos" && (
@@ -513,15 +513,92 @@ export function TaskBoard() {
 }
 
 /* ── Inline add row ───────────────────────────────────────────── */
-function AddRow({ onAdd }: { onAdd: (title: string) => void }) {
+/** Normaliza pra busca tolerante (sem acento, minúsculo). */
+const normText = (s: string) => s.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+function AddRow({ onAdd, suggestions = [] }: { onAdd: (title: string, groups?: string[], flags?: string[]) => void; suggestions?: string[] }) {
   const [adding, setAdding] = useState(false);
   const [draft, setDraft] = useState("");
+  const [groups, setGroups] = useState<string[]>([]);
+  const [flags, setFlags] = useState<string[]>([]);
+  const [gsel, setGsel] = useState(0);
+  const [fsel, setFsel] = useState(0);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Flag "!flag" (só ativa no início de um token) e grupo "#nome do grupo".
+  const flagMatch = /(?:^|\s)!([^\s#!]*)$/.exec(draft);
+  const flagActive = flagMatch !== null;
+  const nFlagQuery = normText((flagMatch?.[1] ?? "").trim());
+  const hashMatch = /#([^#]*)$/.exec(draft);
+  const hashActive = !flagActive && hashMatch !== null;
+  const hashQuery = hashMatch?.[1] ?? "";
+  const nHashQuery = normText(hashQuery.trim());
+
+  const flagSuggestions = flagActive
+    ? TASK_FLAGS.filter((f) => !flags.includes(f.id) && normText(f.label).includes(nFlagQuery))
+    : [];
+  const groupSuggestions = hashActive
+    ? suggestions.filter((g) => !groups.some((x) => normText(x) === normText(g)) && normText(g).includes(nHashQuery)).slice(0, 6)
+    : [];
+  const hashExact = suggestions.some((g) => normText(g) === nHashQuery) || groups.some((g) => normText(g) === nHashQuery);
+  const canCreateGroup = hashActive && hashQuery.trim().length > 0 && !hashExact;
+  const groupOptions: { name: string; create: boolean }[] = [
+    ...groupSuggestions.map((name) => ({ name, create: false })),
+    ...(canCreateGroup ? [{ name: hashQuery.trim(), create: true }] : []),
+  ];
+
+  useEffect(() => { setFsel(0); }, [nFlagQuery, flagActive]);
+  useEffect(() => { setGsel(0); }, [nHashQuery, hashActive]);
+
+  const attachGroup = (name: string) => {
+    const v = name.trim();
+    if (v && !groups.some((x) => normText(x) === normText(v))) setGroups((p) => [...p, v]);
+    setDraft((d) => d.replace(/#([^#]*)$/, "").replace(/\s+$/, ""));
+    inputRef.current?.focus();
+  };
+  const attachFlag = (id: string) => {
+    if (!flags.includes(id)) setFlags((p) => [...p, id]);
+    setDraft((d) => d.replace(/\s*!([^\s#!]*)$/, "").replace(/\s+$/, ""));
+    inputRef.current?.focus();
+  };
+  const removeGroup = (g: string) => setGroups((p) => p.filter((x) => x !== g));
+  const removeFlag = (id: string) => setFlags((p) => p.filter((x) => x !== id));
+
+  const reset = () => { setDraft(""); setGroups([]); setFlags([]); setAdding(false); };
 
   const submit = () => {
-    const t = draft.trim();
-    if (t) onAdd(t);
-    setDraft("");
-    setAdding(false);
+    let title = draft;
+    const g = [...groups];
+    const fl = [...flags];
+    const fm = /(?:^|\s)!([^\s#!]*)$/.exec(title);
+    const hm = /#([^#]*)$/.exec(title);
+    if (fm) {
+      const query = normText(fm[1].trim());
+      const match = TASK_FLAGS.find((f) => normText(f.label) === query || f.id === query);
+      if (match) { if (!fl.includes(match.id)) fl.push(match.id); title = title.replace(/\s*!([^\s#!]*)$/, "").replace(/\s+$/, ""); }
+    } else if (hm) {
+      const t = hm[1].trim();
+      if (t && !g.some((x) => normText(x) === normText(t))) g.push(t);
+      title = title.replace(/#([^#]*)$/, "").replace(/\s+$/, "");
+    }
+    const finalTitle = title.trim();
+    if (finalTitle) onAdd(finalTitle, g, fl);
+    reset();
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") { e.preventDefault(); reset(); return; }
+    if (flagActive && flagSuggestions.length > 0) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setFsel((s) => Math.min(s + 1, flagSuggestions.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setFsel((s) => Math.max(s - 1, 0)); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); const f = flagSuggestions[Math.min(fsel, flagSuggestions.length - 1)]; if (f) attachFlag(f.id); return; }
+    }
+    if (hashActive && groupOptions.length > 0) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setGsel((s) => Math.min(s + 1, groupOptions.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setGsel((s) => Math.max(s - 1, 0)); return; }
+      if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); const o = groupOptions[Math.min(gsel, groupOptions.length - 1)]; if (o) attachGroup(o.name); return; }
+    }
+    if (e.key === "Enter") { e.preventDefault(); submit(); }
   };
 
   if (!adding) {
@@ -538,20 +615,70 @@ function AddRow({ onAdd }: { onAdd: (title: string) => void }) {
   }
 
   return (
-    <div className="mt-1 flex items-center gap-2 py-1 pl-9">
-      <Icon name="Plus" size={12} strokeWidth={2} className="shrink-0 text-muted-2" />
-      <input
-        autoFocus
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") { e.preventDefault(); submit(); }
-          if (e.key === "Escape") { setDraft(""); setAdding(false); }
-        }}
-        onBlur={submit}
-        placeholder="Nova tarefa…"
-        className="flex-1 bg-transparent text-[13px] text-white/80 outline-none placeholder:text-muted-2"
-      />
+    <div className="mt-1 pl-9">
+      <div className="flex items-center gap-2 py-1">
+        <Icon name="Plus" size={12} strokeWidth={2} className="shrink-0 text-muted-2" />
+        <input
+          ref={inputRef}
+          autoFocus
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={onKeyDown}
+          onBlur={() => { if (!flagActive && !hashActive) submit(); }}
+          placeholder="Nova tarefa… (#grupo · !flag)"
+          className="flex-1 bg-transparent text-[13px] text-white/80 outline-none placeholder:text-muted-2"
+        />
+      </div>
+
+      {/* Chips atrelados (flags + grupos) — mousedown preventDefault pra não perder o foco */}
+      {(flags.length > 0 || groups.length > 0) && (
+        <div className="mt-1 flex flex-wrap items-center gap-1.5" onMouseDown={(e) => e.preventDefault()}>
+          {flags.map((id) => {
+            const f = TASK_FLAGS.find((x) => x.id === id);
+            if (!f) return null;
+            return (
+              <span key={id} className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: `${f.color}22`, color: f.color }}>
+                <Icon name={f.icon} size={9} strokeWidth={2.5} />{f.label}
+                <button type="button" onClick={() => removeFlag(id)} className="cursor-pointer opacity-70 transition-opacity hover:opacity-100"><Icon name="X" size={10} strokeWidth={2.5} /></button>
+              </span>
+            );
+          })}
+          {groups.map((g) => (
+            <span key={g} className="flex items-center gap-1 rounded-full bg-white/[0.10] px-2 py-0.5 text-[11px] text-white/80">
+              <Icon name="Layers" size={9} strokeWidth={2} className="text-white/40" />{g}
+              <button type="button" onClick={() => removeGroup(g)} className="cursor-pointer text-white/40 transition-colors hover:text-white"><Icon name="X" size={10} strokeWidth={2.5} /></button>
+            </span>
+          ))}
+        </div>
+      )}
+
+      {/* Sugestões de flag */}
+      {flagActive && flagSuggestions.length > 0 && (
+        <div className="mt-1.5 flex flex-col gap-0.5" onMouseDown={(e) => e.preventDefault()}>
+          {flagSuggestions.map((f, i) => (
+            <button key={f.id} onClick={() => attachFlag(f.id)} onMouseEnter={() => setFsel(i)}
+              className="flex items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors"
+              style={{ background: i === Math.min(fsel, flagSuggestions.length - 1) ? "rgba(255,255,255,0.07)" : "transparent" }}>
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md" style={{ background: `${f.color}22`, color: f.color }}><Icon name={f.icon} size={10} strokeWidth={2.5} /></span>
+              <span className="text-[12px] text-white/85">{f.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Sugestões de grupo */}
+      {hashActive && groupOptions.length > 0 && (
+        <div className="mt-1.5 flex flex-col gap-0.5" onMouseDown={(e) => e.preventDefault()}>
+          {groupOptions.map((o, i) => (
+            <button key={(o.create ? "__c__" : "") + o.name} onClick={() => attachGroup(o.name)} onMouseEnter={() => setGsel(i)}
+              className="flex items-center gap-2 rounded-lg px-2 py-1 text-left transition-colors"
+              style={{ background: i === Math.min(gsel, groupOptions.length - 1) ? "rgba(255,255,255,0.07)" : "transparent" }}>
+              <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md border border-white/15 text-white/50"><Icon name={o.create ? "Plus" : "Layers"} size={10} strokeWidth={2} /></span>
+              <span className="text-[12px] text-white/85">{o.create ? <>Criar grupo <strong className="font-medium">“{o.name}”</strong></> : o.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -565,7 +692,7 @@ function sortUrgentFirst(list: Task[]): Task[] {
 }
 
 /* ── Hoje ─────────────────────────────────────────────────────── */
-function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
+function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch, allGroups }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string, groups?: string[], flags?: string[]) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean; allGroups: string[] }) {
   const done = tasks.filter((t) => t.done).length;
   return (
     <div>
@@ -588,13 +715,13 @@ function HojeView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBr
           ))}
         </motion.div>
       )}
-      <AddRow onAdd={(title) => onAdd(TODAY_LIST, title, fmtDate(new Date()))} />
+      <AddRow suggestions={allGroups} onAdd={(title, groups, flags) => onAdd(TODAY_LIST, title, fmtDate(new Date()), groups, flags)} />
     </div>
   );
 }
 
 /* ── Semana ───────────────────────────────────────────────────── */
-function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, onMove, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; onMove: (id: string, due: string) => void; showBranch: boolean }) {
+function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, onMove, showBranch, allGroups }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string, groups?: string[], flags?: string[]) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; onMove: (id: string, due: string) => void; showBranch: boolean; allGroups: string[] }) {
   return (
     <div className="flex flex-col">
       {TASK_LISTS.map((list, colIdx) => {
@@ -616,6 +743,7 @@ function SemanaView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, onMo
             onMove={onMove}
             colIdx={colIdx}
             showBranch={showBranch}
+            allGroups={allGroups}
           />
         );
       })}
@@ -681,7 +809,7 @@ function parseDue(due: string | undefined | null): { year: number; month: number
   return { day: Number(m[1]), month: Number(m[2]) - 1, year: Number(m[3]) };
 }
 
-function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean }) {
+function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBranch, allGroups }: { tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string, groups?: string[], flags?: string[]) => void; onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void; onOpenEdit: (task: Task) => void; showBranch: boolean; allGroups: string[] }) {
   const [selected, setSelected] = useState<number | null>(null);
   const now = new Date();
   const [year, setYear] = useState(now.getFullYear());
@@ -895,9 +1023,9 @@ function MesView({ tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, showBra
                 {selectedTasks.length === 0 && (
                   <p className="pb-2 text-center text-sm text-muted-2">Nenhuma tarefa.</p>
                 )}
-                <AddRow onAdd={(title) => {
+                <AddRow suggestions={allGroups} onAdd={(title, groups, flags) => {
                   const d = new Date(year, month, selected!);
-                  onAdd(DOW_TO_LIST[d.getDay()], title, fmtDate(d));
+                  onAdd(DOW_TO_LIST[d.getDay()], title, fmtDate(d), groups, flags);
                 }} />
               </div>
             </div>
@@ -945,12 +1073,12 @@ function BacklogView({ tasks, onToggle, onDelete, onEdit, onOpenEdit, showBranch
 
 /* ── Shared components ────────────────────────────────────────── */
 function DaySection({
-  list, label, isToday, tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, onMove, colIdx, showBranch,
+  list, label, isToday, tasks, onToggle, onAdd, onDelete, onEdit, onOpenEdit, onMove, colIdx, showBranch, allGroups = [],
 }: {
   list: TaskList; label: string; isToday: boolean;
-  tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string) => void;
+  tasks: Task[]; onToggle: (id: string) => void; onAdd: (list: TaskList, title: string, due: string, groups?: string[], flags?: string[]) => void;
   onDelete: (id: string, title: string) => void; onEdit: (id: string, title: string) => void;
-  onOpenEdit: (task: Task) => void; onMove?: (id: string, due: string) => void; colIdx: number; showBranch: boolean;
+  onOpenEdit: (task: Task) => void; onMove?: (id: string, due: string) => void; colIdx: number; showBranch: boolean; allGroups?: string[];
 }) {
   const [expanded, setExpanded] = useState(true);
   const [isOver, setIsOver] = useState(false);
@@ -1035,7 +1163,7 @@ function DaySection({
                   ))}
                 </motion.div>
               )}
-              <AddRow onAdd={(title) => onAdd(list, title, fmtDate(dateForList(list)))} />
+              <AddRow suggestions={allGroups} onAdd={(title, groups, flags) => onAdd(list, title, fmtDate(dateForList(list)), groups, flags)} />
             </div>
           </motion.div>
         )}
