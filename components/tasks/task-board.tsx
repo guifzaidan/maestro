@@ -166,6 +166,29 @@ export function TaskBoard() {
     return () => window.removeEventListener("maestro:task-updated", onUpdated as EventListener);
   }, []);
 
+  // Abrir uma task no popup de detalhes a partir da busca rápida (Ctrl+I).
+  const tasksRef = useRef<Task[]>(tasks);
+  tasksRef.current = tasks;
+  useEffect(() => {
+    const onOpen = (e: Event) => {
+      const id = (e as CustomEvent<{ id: string }>).detail?.id;
+      if (!id) return;
+      const t = tasksRef.current.find((x) => x.id === id);
+      if (t) setEditTarget(t);
+    };
+    window.addEventListener("maestro:open-task", onOpen as EventListener);
+    return () => window.removeEventListener("maestro:open-task", onOpen as EventListener);
+  }, []);
+
+  // Vindo de outra página: consome a flag e abre a task quando as tarefas carregam.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = sessionStorage.getItem("maestro:open-task");
+    if (!id) return;
+    const t = tasks.find((x) => x.id === id);
+    if (t) { setEditTarget(t); sessionStorage.removeItem("maestro:open-task"); }
+  }, [tasks]);
+
   const toggle = (id: string) => {
     // Calcula 'next' de forma determinística a partir do estado atual —
     // não dentro do updater do setState (que pode rodar de forma assíncrona).
@@ -437,6 +460,7 @@ export function TaskBoard() {
             onCancel={() => setEditTarget(null)}
             onDelete={() => requestDelete(editTarget.id, editTarget.title)}
             onDuplicate={() => duplicateTask(editTarget)}
+            onToggleDone={() => toggle(editTarget.id)}
           />
         )}
       </AnimatePresence>
@@ -1264,14 +1288,16 @@ function LinkifiedText({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicate }: {
+function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicate, onToggleDone }: {
   task: Task;
   allGroups: string[];
   onSave: (fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[]; flags?: string[] }) => void;
   onCancel: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
+  onToggleDone: () => void;
 }) {
+  const [done, setDone] = useState(task.done);
   const [title, setTitle] = useState(task.title);
   const [due, setDue] = useState(task.due ?? "");
   const [description, setDescription] = useState(task.description ?? "");
@@ -1337,6 +1363,20 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
         <div className="mb-5 flex items-center justify-between">
           <p className="text-[15px] font-semibold text-white">Editar tarefa</p>
           <div className="flex items-center gap-2">
+            <motion.button
+              whileHover={{ scale: 1.08 }}
+              whileTap={{ scale: 0.93 }}
+              onClick={() => { onToggleDone(); setDone((d) => !d); }}
+              className="flex h-8 w-8 cursor-pointer items-center justify-center rounded-xl transition-colors"
+              style={{
+                background: done ? "rgba(52,211,153,0.9)" : "rgba(52,211,153,0.12)",
+                border: "1px solid rgba(52,211,153,0.30)",
+              }}
+              aria-label={done ? "Reabrir tarefa" : "Concluir tarefa"}
+              title={done ? "Reabrir tarefa" : "Marcar como concluída"}
+            >
+              <Icon name="Check" size={15} strokeWidth={2.5} style={{ color: done ? "#0a0a0a" : "#34d399" }} />
+            </motion.button>
             <motion.button
               whileHover={{ scale: 1.08, background: "rgba(255,255,255,0.10)" }}
               whileTap={{ scale: 0.93 }}

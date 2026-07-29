@@ -9,7 +9,7 @@ import { WorkspaceDot } from "@/components/shell/header";
 import { Icon } from "@/components/ui/icon";
 import { DatePicker } from "@/components/ui/date-picker";
 import { fetchGroupMeta } from "@/lib/task-groups-client";
-import { TODAY_LIST, type TaskList } from "@/lib/mock/tasks";
+import { TODAY_LIST, TASK_FLAGS, type TaskList } from "@/lib/mock/tasks";
 import { cn } from "@/lib/utils";
 
 /** Linha de tarefa vinda de /api/tasks usada na busca do overlay. */
@@ -83,6 +83,17 @@ export function KeyboardShortcuts() {
     }
   }, [pathname, router]);
 
+  // Abre uma task existente no popup de detalhes (a partir da busca do overlay).
+  // Na página de tarefas dispara direto; fora dela navega e abre ao montar.
+  const openTask = useCallback((id: string) => {
+    if (pathname === "/tasks") {
+      window.dispatchEvent(new CustomEvent("maestro:open-task", { detail: { id } }));
+    } else {
+      sessionStorage.setItem("maestro:open-task", id);
+      router.push("/tasks");
+    }
+  }, [pathname, router]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Branches: Alt + dígito (0 = todas). Usa e.code (DigitN) porque Alt+número
@@ -124,7 +135,7 @@ export function KeyboardShortcuts() {
   }, [setActive, setAllBranches, toast, startChat]);
 
   const createTask = useCallback(
-    async (title: string, due: string = todayStr(), groups: string[] = []) => {
+    async (title: string, due: string = todayStr(), groups: string[] = [], flags: string[] = []) => {
       const trimmed = title.trim();
       if (!trimmed) return;
       setQuickAdd(false);
@@ -132,7 +143,7 @@ export function KeyboardShortcuts() {
         const res = await fetch("/api/tasks", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ title: trimmed, branch: active, list: listForDue(due), due, groups }),
+          body: JSON.stringify({ title: trimmed, branch: active, list: listForDue(due), due, groups, flags }),
         });
         const data = await res.json();
         if (data.task) {
@@ -169,6 +180,7 @@ export function KeyboardShortcuts() {
           onClose={() => setQuickAdd(false)}
           onSubmit={createTask}
           onToggleDone={toggleDone}
+          onOpenTask={(id) => { setQuickAdd(false); openTask(id); }}
         />
       )}
     </AnimatePresence>
@@ -177,11 +189,12 @@ export function KeyboardShortcuts() {
 
 /* ── Overlay de criação rápida + busca ─────────────────────────── */
 function QuickAddTask({
-  onClose, onSubmit, onToggleDone,
+  onClose, onSubmit, onToggleDone, onOpenTask,
 }: {
   onClose: () => void;
-  onSubmit: (title: string, due: string, groups: string[]) => void;
+  onSubmit: (title: string, due: string, groups: string[], flags: string[]) => void;
   onToggleDone: (id: string, done: boolean) => void;
+  onOpenTask: (id: string) => void;
 }) {
   const { branches, active: activeBranch, allBranches, activeWorkspace, setActive, setAllBranches } = useWorkspace();
   const [value, setValue] = useState("");
@@ -189,12 +202,14 @@ function QuickAddTask({
   const [allTasks, setAllTasks] = useState<QuickTask[]>([]);
   const [knownGroups, setKnownGroups] = useState<string[]>([]);
   const [groups, setGroups] = useState<string[]>([]); // grupos atrelados a esta nova task
+  const [flags, setFlags] = useState<string[]>([]);   // flags atreladas a esta nova task
   // Concluídas localmente nesta sessão do overlay (otimista, sem refetch).
   const [doneLocal, setDoneLocal] = useState<Record<string, boolean>>({});
   // -1 = linha "criar"; 0..n = resultados da busca.
   const [sel, setSel] = useState(-1);
-  // Seleção dentro das sugestões de grupo (modo hashtag).
+  // Seleção dentro das sugestões de grupo (modo #) e de flag (modo !).
   const [gsel, setGsel] = useState(0);
+  const [fsel, setFsel] = useState(0);
   const [branchOpen, setBranchOpen] = useState(false);
   const [dateOpen, setDateOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -222,12 +237,24 @@ function QuickAddTask({
     return () => { cancelled = true; };
   }, []);
 
-  // Detecta uma hashtag sendo digitada no fim do texto: "#nome do grupo".
-  // Nomes podem ter espaços, então a query vai do último "#" até o fim.
+  // Flag sendo digitada no fim: "!flag". O "!" só ativa no início de um token
+  // (precedido de espaço ou começo) pra não pegar exclamação normal ("Ligar!").
+  const flagMatch = /(?:^|\s)!([^\s#!]*)$/.exec(value);
+  const flagActive = flagMatch !== null;
+  const flagQuery = flagMatch ? flagMatch[1] : "";
+  const nFlagQuery = norm(flagQuery.trim());
+
+  // Hashtag de grupo: "#nome do grupo" (nomes podem ter espaços). O modo flag
+  // tem precedência quando o "!" é o gatilho mais ao fim.
   const hashMatch = /#([^#]*)$/.exec(value);
-  const hashActive = hashMatch !== null;
+  const hashActive = !flagActive && hashMatch !== null;
   const hashQuery = hashMatch ? hashMatch[1] : "";
   const nHashQuery = norm(hashQuery.trim());
+
+  const flagSuggestions = useMemo(() => {
+    if (!flagActive) return [] as typeof TASK_FLAGS;
+    return TASK_FLAGS.filter((f) => !flags.includes(f.id) && norm(f.label).includes(nFlagQuery));
+  }, [flagActive, flags, nFlagQuery]);
 
   const groupSuggestions = useMemo(() => {
     if (!hashActive) return [] as string[];
@@ -247,17 +274,18 @@ function QuickAddTask({
 
   const q = value.trim();
   const matches = useMemo(() => {
-    if (!q || hashActive) return [] as QuickTask[];
+    if (!q || hashActive || flagActive) return [] as QuickTask[];
     const nq = norm(q);
     return allTasks
       .filter((t) => allBranches || t.branch === activeBranch)
       .filter((t) => norm(t.title).includes(nq))
       .slice(0, 6);
-  }, [q, hashActive, allTasks, allBranches, activeBranch]);
+  }, [q, hashActive, flagActive, allTasks, allBranches, activeBranch]);
 
   // Reposiciona a seleção quando os resultados mudam (volta pra linha "criar").
   useEffect(() => { setSel(-1); }, [q]);
   useEffect(() => { setGsel(0); }, [hashQuery, hashActive]);
+  useEffect(() => { setFsel(0); }, [flagQuery, flagActive]);
 
   const toggle = (t: QuickTask) => {
     const next = !(doneLocal[t.id] ?? t.done);
@@ -274,21 +302,50 @@ function QuickAddTask({
   };
   const removeGroup = (name: string) => setGroups((p) => p.filter((g) => g !== name));
 
-  // Monta título + grupos finais e envia. Converte hashtag não-selecionada em grupo.
+  // Atrela uma flag e remove o "!token" digitado do texto.
+  const attachFlag = (id: string) => {
+    if (!flags.includes(id)) setFlags((p) => [...p, id]);
+    setValue((val) => val.replace(/\s*!([^\s#!]*)$/, "").replace(/\s+$/, ""));
+    inputRef.current?.focus();
+  };
+  const removeFlag = (id: string) => setFlags((p) => p.filter((f) => f !== id));
+
+  // Monta título + grupos + flags e envia. Converte token não-selecionado (#/!) no fim.
   const submit = () => {
     let title = value;
     const g = [...groups];
-    const m = /#([^#]*)$/.exec(title);
-    if (m) {
-      const t = m[1].trim();
+    const fl = [...flags];
+    const fm = /(?:^|\s)!([^\s#!]*)$/.exec(title);
+    const hm = /#([^#]*)$/.exec(title);
+    if (fm) {
+      const query = norm(fm[1].trim());
+      const match = TASK_FLAGS.find((f) => norm(f.label) === query || f.id === query);
+      if (match) {
+        if (!fl.includes(match.id)) fl.push(match.id);
+        title = title.replace(/\s*!([^\s#!]*)$/, "").replace(/\s+$/, "");
+      }
+    } else if (hm) {
+      const t = hm[1].trim();
       if (t && !g.some((x) => norm(x) === norm(t))) g.push(t);
       title = title.replace(/#([^#]*)$/, "").replace(/\s+$/, "");
     }
-    onSubmit(title, due, g);
+    onSubmit(title, due, g, fl);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Escape") { e.preventDefault(); onClose(); return; }
+
+    // Modo flag ("!"): navega/seleciona flags.
+    if (flagActive && flagSuggestions.length > 0) {
+      if (e.key === "ArrowDown") { e.preventDefault(); setFsel((s) => Math.min(s + 1, flagSuggestions.length - 1)); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); setFsel((s) => Math.max(s - 1, 0)); return; }
+      if (e.key === "Enter" || e.key === "Tab") {
+        e.preventDefault();
+        const f = flagSuggestions[Math.min(fsel, flagSuggestions.length - 1)];
+        if (f) attachFlag(f.id);
+        return;
+      }
+    }
 
     // Modo hashtag: navega/seleciona grupos em vez de buscar tarefas.
     if (hashActive && groupOptions.length > 0) {
@@ -314,7 +371,7 @@ function QuickAddTask({
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      if (sel >= 0 && matches[sel]) toggle(matches[sel]);
+      if (sel >= 0 && matches[sel]) onOpenTask(matches[sel].id);
       else submit();
     }
   };
@@ -420,14 +477,27 @@ function QuickAddTask({
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={onKeyDown}
-          placeholder="O que precisa ser feito? (#grupo pra agrupar · ou busque)"
+          placeholder="O que precisa ser feito? (#grupo · !flag · ou busque)"
           className="w-full rounded-xl bg-white/[0.04] px-3.5 py-2.5 text-sm text-white outline-none placeholder:text-muted-2"
           style={{ border: "1px solid rgba(255,255,255,0.08)" }}
         />
 
-        {/* Grupos atrelados (chips) */}
-        {groups.length > 0 && (
+        {/* Flags + grupos atrelados (chips) */}
+        {(flags.length > 0 || groups.length > 0) && (
           <div className="mt-2 flex flex-wrap items-center gap-1.5 px-0.5">
+            {flags.map((id) => {
+              const f = TASK_FLAGS.find((x) => x.id === id);
+              if (!f) return null;
+              return (
+                <span key={id} className="flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: `${f.color}22`, color: f.color }}>
+                  <Icon name={f.icon} size={9} strokeWidth={2.5} />
+                  {f.label}
+                  <button type="button" onClick={() => removeFlag(id)} className="cursor-pointer opacity-70 transition-opacity hover:opacity-100">
+                    <Icon name="X" size={10} strokeWidth={2.5} />
+                  </button>
+                </span>
+              );
+            })}
             {groups.map((g) => (
               <span key={g} className="flex items-center gap-1 rounded-full bg-white/[0.10] px-2 py-0.5 text-[11px] text-white/80">
                 <Icon name="Layers" size={9} strokeWidth={2} className="text-white/40" />
@@ -439,6 +509,40 @@ function QuickAddTask({
             ))}
           </div>
         )}
+
+        {/* Sugestões de flag (modo "!") */}
+        <AnimatePresence initial={false}>
+          {flagActive && flagSuggestions.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.16 }}
+              style={{ overflow: "hidden" }}
+            >
+              <div className="mt-2 flex flex-col gap-0.5">
+                <p className="px-1 pb-1 pt-1 text-[10px] uppercase tracking-widest text-muted-2">Flags</p>
+                {flagSuggestions.map((f, i) => {
+                  const activeRow = i === Math.min(fsel, flagSuggestions.length - 1);
+                  return (
+                    <button
+                      key={f.id}
+                      onClick={() => attachFlag(f.id)}
+                      onMouseEnter={() => setFsel(i)}
+                      className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors"
+                      style={{ background: activeRow ? "rgba(255,255,255,0.07)" : "transparent" }}
+                    >
+                      <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-md" style={{ background: `${f.color}22`, color: f.color }}>
+                        <Icon name={f.icon} size={10} strokeWidth={2.5} />
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-[13px] text-white/90">{f.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Sugestões de grupo (modo hashtag) */}
         <AnimatePresence initial={false}>
@@ -493,22 +597,26 @@ function QuickAddTask({
                   const isDone = doneLocal[t.id] ?? t.done;
                   const active = i === sel;
                   return (
-                    <button
+                    <div
                       key={t.id}
-                      onClick={() => toggle(t)}
+                      onClick={() => onOpenTask(t.id)}
                       onMouseEnter={() => setSel(i)}
-                      className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors"
+                      className="flex cursor-pointer items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition-colors"
                       style={{ background: active ? "rgba(255,255,255,0.07)" : "transparent" }}
                     >
-                      <span
-                        className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border transition-colors"
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); toggle(t); }}
+                        aria-label={isDone ? "Reabrir" : "Concluir"}
+                        title={isDone ? "Reabrir" : "Marcar como concluída"}
+                        className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border transition-colors"
                         style={{
                           borderColor: isDone ? "rgba(52,211,153,0.8)" : "rgba(255,255,255,0.25)",
                           background: isDone ? "rgba(52,211,153,0.8)" : "transparent",
                         }}
                       >
                         {isDone && <Icon name="Check" size={11} strokeWidth={3} className="text-black" />}
-                      </span>
+                      </button>
                       <span className={cn("min-w-0 flex-1 truncate text-[13px]", isDone ? "text-muted-2 line-through" : "text-white/90")}>
                         {t.title}
                       </span>
@@ -518,7 +626,7 @@ function QuickAddTask({
                           {ws.name}
                         </span>
                       )}
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -580,7 +688,7 @@ function QuickAddTask({
           </div>
 
           <span>
-            <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono">Enter</kbd> {hashActive && groupOptions.length > 0 ? "atrelar grupo" : sel >= 0 ? "concluir" : "criar"} · <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono">Esc</kbd> fechar
+            <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono">Enter</kbd> {flagActive && flagSuggestions.length > 0 ? "atrelar flag" : hashActive && groupOptions.length > 0 ? "atrelar grupo" : sel >= 0 ? "abrir" : "criar"} · <kbd className="rounded bg-white/10 px-1.5 py-0.5 font-mono">Esc</kbd> fechar
           </span>
         </div>
       </motion.div>
