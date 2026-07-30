@@ -15,7 +15,21 @@ export interface RecurringDTO {
   dayOfMonth: number | null;
   active: boolean;
   lastGenerated: string | null;
+  /** Grupos/flags herdados pelas tasks geradas. */
+  groups: string[];
+  flags: string[];
   createdAt: number;
+}
+
+/** Lê uma coluna JSON de array; tolera valor inválido/nulo. */
+function parseArr(raw: string | null): string[] {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    return Array.isArray(v) ? (v as string[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function toDTO(r: RecurringTask): RecurringDTO {
@@ -29,6 +43,8 @@ function toDTO(r: RecurringTask): RecurringDTO {
     dayOfMonth: r.dayOfMonth,
     active: r.active,
     lastGenerated: r.lastGenerated,
+    groups: parseArr(r.groups),
+    flags: parseArr(r.flags),
     createdAt: r.createdAt,
   };
 }
@@ -50,7 +66,12 @@ export interface UpsertRecurringInput {
   weekdays?: string[];
   dayOfMonth?: number | null;
   active?: boolean;
+  groups?: string[];
+  flags?: string[];
 }
+
+/** Serializa array pra coluna JSON; vazio vira null (mesma convenção das tasks). */
+const serArr = (v: string[] | undefined) => (v && v.length ? JSON.stringify(v) : null);
 
 export async function upsertRecurring(input: UpsertRecurringInput): Promise<RecurringDTO> {
   await ensureSchema();
@@ -68,6 +89,9 @@ export async function upsertRecurring(input: UpsertRecurringInput): Promise<Recu
         weekdays,
         dayOfMonth,
         active: input.active ?? existing.active,
+        // undefined = campo não enviado, preserva o que já está salvo.
+        groups: input.groups !== undefined ? serArr(input.groups) : existing.groups,
+        flags: input.flags !== undefined ? serArr(input.flags) : existing.flags,
       }).where(eq(recurringTasks.id, input.id));
       const updated = (await db.select().from(recurringTasks).where(eq(recurringTasks.id, input.id)))[0];
       return toDTO(updated);
@@ -84,6 +108,8 @@ export async function upsertRecurring(input: UpsertRecurringInput): Promise<Recu
     dayOfMonth,
     active: input.active ?? true,
     lastGenerated: null,
+    groups: serArr(input.groups),
+    flags: serArr(input.flags),
     createdAt: Date.now(),
   };
   await db.insert(recurringTasks).values(row);
@@ -150,6 +176,8 @@ export async function generateDueTasks(): Promise<number> {
         due: t.dd,
         list: t.weekday,
         instruction: r.instruction ?? null,
+        groups: r.groups,
+        flags: r.flags,
         sourceRecurring: r.id,
       });
       await db.update(recurringTasks).set({ lastGenerated: t.dd }).where(eq(recurringTasks.id, r.id));

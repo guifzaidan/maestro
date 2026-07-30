@@ -116,6 +116,8 @@ export const recurringTasks = sqliteTable("recurring_tasks", {
   dayOfMonth:    integer("day_of_month"),
   active:        integer("active", { mode: "boolean" }).notNull().default(true),
   lastGenerated: text("last_generated"),
+  groups:        text("groups"),
+  flags:         text("flags"),
   createdAt:     integer("created_at").notNull(),
 });
 

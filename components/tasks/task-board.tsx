@@ -467,7 +467,7 @@ export function TaskBoard() {
 
       <AnimatePresence>
         {recurringOpen && (
-          <RecurringModal onClose={() => { setRecurringOpen(false); loadTasks(); }} />
+          <RecurringModal allGroups={allGroups} onClose={() => { setRecurringOpen(false); loadTasks(); }} />
         )}
       </AnimatePresence>
 
@@ -1202,9 +1202,9 @@ function freqSummary(r: RecurringDTO): string {
   return `Todo dia ${r.dayOfMonth ?? "?"}`;
 }
 
-type RecurForm = { id?: string; branch: string; title: string; instruction: string; frequency: Frequency; weekdays: string[]; dayOfMonth: number };
+type RecurForm = { id?: string; branch: string; title: string; instruction: string; frequency: Frequency; weekdays: string[]; dayOfMonth: number; groups: string[]; flags: string[] };
 
-function RecurringModal({ onClose }: { onClose: () => void }) {
+function RecurringModal({ onClose, allGroups = [] }: { onClose: () => void; allGroups?: string[] }) {
   const { active, branches } = useWorkspace();
   const { toast } = useToast();
   const [items, setItems] = useState<RecurringDTO[]>([]);
@@ -1214,8 +1214,15 @@ function RecurringModal({ onClose }: { onClose: () => void }) {
   const reload = () => fetchRecurring().then(setItems).catch(() => {});
   useEffect(() => { reload(); }, []);
 
-  const newForm = (): RecurForm => ({ branch: active, title: "", instruction: "", frequency: "daily", weekdays: ["seg"], dayOfMonth: 1 });
-  const editForm = (r: RecurringDTO): RecurForm => ({ id: r.id, branch: r.branch, title: r.title, instruction: r.instruction ?? "", frequency: r.frequency, weekdays: r.weekdays.length ? r.weekdays : ["seg"], dayOfMonth: r.dayOfMonth ?? 1 });
+  // Sugestões: grupos já usados nas tasks + os já usados nas recorrentes.
+  const groupSuggestions = useMemo(() => {
+    const set = new Set(allGroups);
+    items.forEach((r) => r.groups?.forEach((g) => set.add(g)));
+    return [...set].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [allGroups, items]);
+
+  const newForm = (): RecurForm => ({ branch: active, title: "", instruction: "", frequency: "daily", weekdays: ["seg"], dayOfMonth: 1, groups: [], flags: [] });
+  const editForm = (r: RecurringDTO): RecurForm => ({ id: r.id, branch: r.branch, title: r.title, instruction: r.instruction ?? "", frequency: r.frequency, weekdays: r.weekdays.length ? r.weekdays : ["seg"], dayOfMonth: r.dayOfMonth ?? 1, groups: r.groups ?? [], flags: r.flags ?? [] });
 
   const save = async () => {
     if (!form || !form.title.trim()) return;
@@ -1225,6 +1232,7 @@ function RecurringModal({ onClose }: { onClose: () => void }) {
         id: form.id, branch: form.branch, title: form.title.trim(),
         instruction: form.instruction.trim() || null, frequency: form.frequency,
         weekdays: form.weekdays, dayOfMonth: form.dayOfMonth,
+        groups: form.groups, flags: form.flags,
       });
       setForm(null);
       await reload();
@@ -1285,6 +1293,19 @@ function RecurringModal({ onClose }: { onClose: () => void }) {
                   <div className="min-w-0 flex-1">
                     <p className={cn("truncate text-sm", !r.active && "text-muted-2 line-through")}>{r.title}</p>
                     <p className="text-[11px] text-muted-2">{ws.name} · {freqSummary(r)}</p>
+                    {((r.flags?.length ?? 0) > 0 || (r.groups?.length ?? 0) > 0) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        {TASK_FLAGS.filter((f) => r.flags?.includes(f.id)).map((f) => (
+                          <span key={f.id} className="flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide"
+                            style={{ background: `${f.color}22`, color: f.color }}>
+                            <Icon name={f.icon} size={9} strokeWidth={2.5} />{f.label}
+                          </span>
+                        ))}
+                        {r.groups?.map((g) => (
+                          <span key={g} className="rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[9px] font-medium text-white/45">{g}</span>
+                        ))}
+                      </div>
+                    )}
                   </div>
                   <button onClick={() => toggleActive(r)} title={r.active ? "Ativa" : "Pausada"}
                     className={cn("relative h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors", r.active ? "bg-emerald-400/80" : "bg-white/15")}>
@@ -1357,6 +1378,29 @@ function RecurringModal({ onClose }: { onClose: () => void }) {
                   <span>do mês</span>
                 </div>
               )}
+
+              {/* Flags — as tasks geradas já nascem com elas */}
+              <div className="flex flex-wrap gap-1.5">
+                {TASK_FLAGS.map((f) => {
+                  const on = form.flags.includes(f.id);
+                  return (
+                    <button key={f.id} type="button"
+                      onClick={() => setForm((p) => p ? { ...p, flags: p.flags.includes(f.id) ? p.flags.filter((x) => x !== f.id) : [...p.flags, f.id] } : p)}
+                      className="flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-medium transition-colors"
+                      style={{ border: `1px solid ${on ? f.color : "var(--border)"}`, background: on ? `${f.color}22` : "transparent", color: on ? f.color : "var(--muted)" }}>
+                      <Icon name={f.icon} size={12} strokeWidth={2} />
+                      {f.label}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Grupos — herdados pelas tasks geradas */}
+              <GroupChipInput
+                groups={form.groups}
+                onChange={(g) => setForm((p) => p ? { ...p, groups: g } : p)}
+                suggestions={groupSuggestions}
+              />
 
               <textarea value={form.instruction} onChange={(e) => setForm({ ...form, instruction: e.target.value })}
                 placeholder="Detalhes / instrução (opcional)" rows={2}
@@ -1441,6 +1485,20 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
   // Só fecha se o clique COMEÇOU no backdrop (evita fechar ao selecionar texto
   // e soltar o mouse fora do popup).
   const downOnBackdrop = useRef(false);
+  const descRef = useRef<HTMLTextAreaElement>(null);
+
+  /* Descrição cresce junto com o conteúdo enquanto digita, até um teto (depois
+     rola internamente pra não estourar o modal). Com `height: auto` a altura
+     natural do textarea vem do `rows`, e scrollHeight nunca é menor que isso —
+     então o tamanho padrão continua sendo o piso, sem número mágico. */
+  const DESC_MAX_H = 240;
+  useEffect(() => {
+    const el = descRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const borders = el.offsetHeight - el.clientHeight; // box-sizing: border-box
+    el.style.height = `${Math.min(el.scrollHeight + borders, DESC_MAX_H)}px`;
+  }, [description, descEditing]);
 
   useEffect(() => {
     if (!calOpen) return;
@@ -1664,6 +1722,7 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
             <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-widest text-white/40">Descrição</label>
             {descEditing || !description.trim() ? (
               <textarea
+                ref={descRef}
                 autoFocus={descEditing}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
@@ -1674,8 +1733,8 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
                 onBlur={() => setDescEditing(false)}
                 placeholder="Detalhes, observações, notas… (links viram clicáveis)"
                 rows={3}
-                className="w-full resize-none rounded-xl px-3.5 py-2.5 text-[13px] text-white/90 outline-none placeholder:text-white/25 transition-colors"
-                style={FIELD_STYLE}
+                className="w-full resize-none overflow-y-auto rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-white/90 outline-none placeholder:text-white/25 transition-colors"
+                style={{ ...FIELD_STYLE, maxHeight: DESC_MAX_H }}
               />
             ) : (
               <div

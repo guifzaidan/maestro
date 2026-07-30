@@ -25,6 +25,8 @@ export async function POST(request: Request) {
       weekdays: Array.isArray(body.weekdays) ? body.weekdays : [],
       dayOfMonth: typeof body.dayOfMonth === "number" ? body.dayOfMonth : null,
       active: typeof body.active === "boolean" ? body.active : undefined,
+      groups: Array.isArray(body.groups) ? body.groups : undefined,
+      flags: Array.isArray(body.flags) ? body.flags : undefined,
     });
     return NextResponse.json({ recurring: item });
   } catch (e) {

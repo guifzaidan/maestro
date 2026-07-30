@@ -12,6 +12,9 @@ export interface RecurringDTO {
   dayOfMonth: number | null;
   active: boolean;
   lastGenerated: string | null;
+  /** Grupos/flags herdados pelas tasks geradas. */
+  groups: string[];
+  flags: string[];
   createdAt: number;
 }
 
@@ -24,6 +27,8 @@ export interface SaveRecurringInput {
   weekdays?: string[];
   dayOfMonth?: number | null;
   active?: boolean;
+  groups?: string[];
+  flags?: string[];
 }
 
 export async function fetchRecurring(branch?: string): Promise<RecurringDTO[]> {
