@@ -1667,6 +1667,10 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
                 autoFocus={descEditing}
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
+                // Marca como "editando" já no foco: sem isso, ao digitar a 1ª letra
+                // numa descrição vazia a condição acima virava falsa e o textarea
+                // desmontava no meio da digitação (perdia o foco e pulava o layout).
+                onFocus={() => setDescEditing(true)}
                 onBlur={() => setDescEditing(false)}
                 placeholder="Detalhes, observações, notas… (links viram clicáveis)"
                 rows={3}
