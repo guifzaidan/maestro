@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { DatePicker } from "@/components/ui/date-picker";
 import { fetchRecurring, saveRecurring, removeRecurring, generateRecurring, type RecurringDTO, type Frequency } from "@/lib/recurring-client";
 import { fetchGroupMeta, saveGroupOrder, saveEmptyGroups, renameGroupRemote, type EmptyGroup } from "@/lib/task-groups-client";
+import { DescriptionEditor } from "@/components/tasks/description-editor";
 import { AnimatePresence, motion, type Variants } from "framer-motion";
 import { useWorkspace, getWorkspace } from "@/lib/workspace-context";
 import { WorkspaceDot } from "@/components/shell/header";
@@ -1438,100 +1439,6 @@ function RecurringModal({ onClose, allGroups = [] }: { onClose: () => void; allG
   );
 }
 
-/** Renderiza texto convertendo URLs (http/https/www) em links clicáveis. */
-function LinkifiedText({ text }: { text: string }) {
-  const re = /(https?:\/\/[^\s]+|www\.[^\s]+)/gi;
-  const parts: React.ReactNode[] = [];
-  let last = 0;
-  let key = 0;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    if (m.index > last) parts.push(text.slice(last, m.index));
-    let url = m[0];
-    let trail = "";
-    const tm = /[.,;:!?)\]]+$/.exec(url); // não engole pontuação final
-    if (tm) { trail = tm[0]; url = url.slice(0, -trail.length); }
-    const href = url.startsWith("http") ? url : `https://${url}`;
-    parts.push(
-      <a
-        key={key++}
-        href={href}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(e) => e.stopPropagation()}
-        className="text-sky-400 underline decoration-sky-400/40 underline-offset-2 transition-colors hover:text-sky-300"
-      >
-        {url}
-      </a>,
-    );
-    if (trail) parts.push(trail);
-    last = m.index + m[0].length;
-  }
-  if (last < text.length) parts.push(text.slice(last));
-  return <>{parts}</>;
-}
-
-/* ── Descrição formatada ──────────────────────────────────────────
-   Linhas viram bullets/checkboxes na visão de leitura. Sintaxe:
-     "- item"  ou  "* item"          → bullet
-     "[ ] item"  ou  "- [x] item"    → checkbox (clicável)
-   O texto cru continua sendo a fonte de verdade (é o que vai no banco). */
-const CHECK_RE = /^(\s*)(?:[-*]\s+)?\[([ xX])\]\s?(.*)$/;
-const BULLET_RE = /^(\s*)[-*]\s+(.*)$/;
-
-function DescriptionContent({ text, onToggleCheck }: { text: string; onToggleCheck: (lineIndex: number) => void }) {
-  return (
-    <div className="flex flex-col gap-1">
-      {text.split("\n").map((line, i) => {
-        const check = CHECK_RE.exec(line);
-        if (check) {
-          const [, indent, mark, content] = check;
-          const done = mark.toLowerCase() === "x";
-          return (
-            <div key={i} className="flex items-start gap-2" style={{ paddingLeft: indent.length * 8 }}>
-              <button
-                type="button"
-                onClick={(e) => { e.stopPropagation(); onToggleCheck(i); }}
-                aria-label={done ? "Desmarcar item" : "Marcar item"}
-                className="mt-[3px] flex h-[15px] w-[15px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border transition-colors"
-                style={{
-                  borderColor: done ? "rgba(52,211,153,0.85)" : "rgba(255,255,255,0.28)",
-                  background: done ? "rgba(52,211,153,0.85)" : "transparent",
-                }}
-              >
-                {done && <Icon name="Check" size={10} strokeWidth={3} style={{ color: "#0a0a0a" }} />}
-              </button>
-              <span className={cn("min-w-0 flex-1 whitespace-pre-wrap break-words", done && "text-muted-2 line-through")}>
-                <LinkifiedText text={content} />
-              </span>
-            </div>
-          );
-        }
-
-        const bullet = BULLET_RE.exec(line);
-        if (bullet) {
-          const [, indent, content] = bullet;
-          return (
-            <div key={i} className="flex items-start gap-2" style={{ paddingLeft: indent.length * 8 }}>
-              <span className="mt-[8px] h-[3px] w-[3px] shrink-0 rounded-full bg-white/45" />
-              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
-                <LinkifiedText text={content} />
-              </span>
-            </div>
-          );
-        }
-
-        if (!line.trim()) return <div key={i} className="h-2" />;
-        return (
-          <p key={i} className="whitespace-pre-wrap break-words">
-            <LinkifiedText text={line} />
-          </p>
-        );
-      })}
-    </div>
-  );
-}
-
 function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicate, onToggleDone, onPersistDescription }: {
   task: Task;
   allGroups: string[];
@@ -1548,7 +1455,6 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
   const [description, setDescription] = useState(task.description ?? "");
   const [groups, setGroups] = useState<string[]>(task.groups ?? []);
   const [flags, setFlags] = useState<string[]>(task.flags ?? []);
-  const [descEditing, setDescEditing] = useState(false);
   const { branches } = useWorkspace();
   const [branch, setBranch] = useState<string>(task.branch);
   const [calOpen, setCalOpen] = useState(false);
@@ -1558,65 +1464,15 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
   // Só fecha se o clique COMEÇOU no backdrop (evita fechar ao selecionar texto
   // e soltar o mouse fora do popup).
   const downOnBackdrop = useRef(false);
-  const descRef = useRef<HTMLTextAreaElement>(null);
 
-  /* Descrição cresce junto com o conteúdo enquanto digita, até um teto (depois
-     rola internamente pra não estourar o modal). Com `height: auto` a altura
-     natural do textarea vem do `rows`, e scrollHeight nunca é menor que isso —
-     então o tamanho padrão continua sendo o piso, sem número mágico. */
-  const DESC_MAX_H = 240;
-  // Posição do cursor a restaurar depois de mexer no texto por código
-  // (continuação de lista) — senão o caret pularia pro fim.
-  const caretRef = useRef<number | null>(null);
-  useEffect(() => {
-    const el = descRef.current;
-    if (!el) return;
-    el.style.height = "auto";
-    const borders = el.offsetHeight - el.clientHeight; // box-sizing: border-box
-    el.style.height = `${Math.min(el.scrollHeight + borders, DESC_MAX_H)}px`;
-    if (caretRef.current !== null) {
-      el.setSelectionRange(caretRef.current, caretRef.current);
-      caretRef.current = null;
-    }
-  }, [description, descEditing]);
-
-  /** Marca/desmarca um item de checklist e já persiste (checklist é ação, não
-      rascunho — não some se fechar sem salvar). */
-  const toggleCheck = (lineIndex: number) => {
-    const lines = description.split("\n");
-    const line = lines[lineIndex];
-    if (line === undefined) return;
-    lines[lineIndex] = line.replace(/\[([ xX])\]/, (_m, c: string) => (c === " " ? "[x]" : "[ ]"));
-    const next = lines.join("\n");
+  /* Mudança na descrição. Se o único delta foi marcar/desmarcar um checkbox,
+     persiste na hora — checklist é ação, não rascunho, e não pode sumir se
+     fechar sem salvar. Digitação normal segue esperando o "Salvar". */
+  const stripChecks = (s: string) => s.replace(/\[[ xX]?\]/g, "[]");
+  const handleDescChange = (next: string) => {
+    const onlyCheckToggled = next !== description && stripChecks(next) === stripChecks(description);
     setDescription(next);
-    onPersistDescription(next);
-  };
-
-  /* Enter continua a lista automaticamente: "- item" gera "- " na linha nova,
-     "[ ] item" gera "[ ] ". Enter numa linha de lista vazia sai da lista. */
-  const onDescKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key !== "Enter" || e.shiftKey) return;
-    const el = e.currentTarget;
-    const pos = el.selectionStart ?? 0;
-    if (pos !== (el.selectionEnd ?? pos)) return; // com seleção, deixa o padrão
-    const lineStart = description.lastIndexOf("\n", pos - 1) + 1;
-    const line = description.slice(lineStart, pos);
-    const m = /^(\s*)([-*]\s+)?(\[[ xX]\]\s?)?(.*)$/.exec(line);
-    if (!m) return;
-    const [, indent, bullet, box, content] = m;
-    if (!bullet && !box) return; // linha comum: Enter normal
-    e.preventDefault();
-    if (!content.trim()) {
-      // marcador sem conteúdo → limpa a linha e sai da lista
-      const next = description.slice(0, lineStart) + description.slice(pos);
-      setDescription(next);
-      caretRef.current = lineStart;
-      return;
-    }
-    const prefix = `${indent}${bullet ?? ""}${box ? "[ ] " : ""}`;
-    const next = `${description.slice(0, pos)}\n${prefix}${description.slice(pos)}`;
-    setDescription(next);
-    caretRef.current = pos + 1 + prefix.length;
+    if (onlyCheckToggled) onPersistDescription(next);
   };
 
   useEffect(() => {
@@ -1836,36 +1692,15 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
             <GroupChipInput groups={groups} onChange={setGroups} suggestions={allGroups} />
           </div>
 
-          {/* Descrição — links clicáveis; clique no texto pra editar */}
+          {/* Descrição — formata enquanto digita ("- " vira bullet, "[] " vira checkbox) */}
           <div>
             <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-widest text-white/40">Descrição</label>
-            {descEditing || !description.trim() ? (
-              <textarea
-                ref={descRef}
-                autoFocus={descEditing}
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                // Marca como "editando" já no foco: sem isso, ao digitar a 1ª letra
-                // numa descrição vazia a condição acima virava falsa e o textarea
-                // desmontava no meio da digitação (perdia o foco e pulava o layout).
-                onFocus={() => setDescEditing(true)}
-                onBlur={() => setDescEditing(false)}
-                onKeyDown={onDescKeyDown}
-                placeholder="Detalhes, notas…  ( - lista   ·   [ ] checklist )"
-                rows={3}
-                className="w-full resize-none overflow-y-auto rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-white/90 outline-none placeholder:text-white/25 transition-colors"
-                style={{ ...FIELD_STYLE, maxHeight: DESC_MAX_H }}
-              />
-            ) : (
-              <div
-                onClick={() => setDescEditing(true)}
-                title="Clique para editar"
-                className="min-h-[46px] cursor-text rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-white/90 transition-colors"
-                style={FIELD_STYLE}
-              >
-                <DescriptionContent text={description} onToggleCheck={toggleCheck} />
-              </div>
-            )}
+            <DescriptionEditor
+              value={description}
+              onChange={handleDescChange}
+              placeholder="Detalhes, notas…  ( - lista   ·   [] checklist )"
+              maxHeight={240}
+            />
           </div>
         </div>
 

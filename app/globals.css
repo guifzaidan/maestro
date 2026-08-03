@@ -180,3 +180,84 @@ body {
   100% { transform: scale(1) rotate(0deg); }
 }
 .check-pop { animation: check-pop 0.28s cubic-bezier(.34,1.56,.64,1) forwards; }
+
+/* ── Editor da descrição da task (Tiptap) ─────────────────────────
+   O preflight do Tailwind zera listas/checkbox, então o visual do
+   conteúdo editável é definido aqui. */
+.desc-editor .desc-prose { outline: none; }
+.desc-editor .desc-prose > * + * { margin-top: 0.25rem; }
+.desc-editor .desc-prose p { margin: 0; }
+
+/* Lista com bullet */
+.desc-editor .desc-prose ul:not([data-type="taskList"]) {
+  list-style: disc;
+  padding-left: 1.05rem;
+}
+.desc-editor .desc-prose ul:not([data-type="taskList"]) li::marker {
+  color: rgba(255, 255, 255, 0.45);
+  font-size: 0.85em;
+}
+.desc-editor .desc-prose ul ul { margin-top: 0.25rem; }
+
+/* Checklist */
+.desc-editor .desc-prose ul[data-type="taskList"] {
+  list-style: none;
+  padding-left: 0;
+}
+.desc-editor .desc-prose ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+.desc-editor .desc-prose ul[data-type="taskList"] li > label {
+  flex-shrink: 0;
+  margin-top: 0.2rem;
+  user-select: none;
+}
+.desc-editor .desc-prose ul[data-type="taskList"] li > div { flex: 1 1 auto; min-width: 0; }
+.desc-editor .desc-prose input[type="checkbox"] {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  background: transparent;
+  cursor: pointer;
+  display: grid;
+  place-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.desc-editor .desc-prose input[type="checkbox"]:checked {
+  background: rgba(52, 211, 153, 0.85);
+  border-color: rgba(52, 211, 153, 0.85);
+}
+.desc-editor .desc-prose input[type="checkbox"]:checked::after {
+  content: "";
+  width: 8px;
+  height: 5px;
+  border-left: 2px solid #0a0a0a;
+  border-bottom: 2px solid #0a0a0a;
+  transform: rotate(-45deg) translateY(-1px);
+}
+.desc-editor .desc-prose li[data-checked="true"] > div {
+  color: var(--muted-2);
+  text-decoration: line-through;
+}
+
+/* Links */
+.desc-editor .desc-prose a {
+  color: #38bdf8;
+  text-decoration: underline;
+  text-decoration-color: rgba(56, 189, 248, 0.4);
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* Placeholder da primeira linha vazia */
+.desc-editor .desc-prose p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: rgba(255, 255, 255, 0.25);
+}
