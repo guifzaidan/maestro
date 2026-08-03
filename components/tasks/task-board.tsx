@@ -293,6 +293,16 @@ export function TaskBoard() {
     toast("Tarefa atualizada", "edit");
   };
 
+  // Salva só a descrição, sem fechar o modal (usado ao marcar item de checklist).
+  const persistDescription = (id: string, description: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, description } : t)));
+    fetch("/api/tasks", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id, instruction: description }),
+    }).catch(() => {});
+  };
+
   const addTask = async (list: TaskList, title: string, due: string, groups?: string[], flags?: string[]) => {
     const trimmed = title.trim();
     if (!trimmed) return;
@@ -461,6 +471,7 @@ export function TaskBoard() {
             onDelete={() => requestDelete(editTarget.id, editTarget.title)}
             onDuplicate={() => duplicateTask(editTarget)}
             onToggleDone={() => toggle(editTarget.id)}
+            onPersistDescription={(desc) => persistDescription(editTarget.id, desc)}
           />
         )}
       </AnimatePresence>
@@ -1460,7 +1471,68 @@ function LinkifiedText({ text }: { text: string }) {
   return <>{parts}</>;
 }
 
-function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicate, onToggleDone }: {
+/* ── Descrição formatada ──────────────────────────────────────────
+   Linhas viram bullets/checkboxes na visão de leitura. Sintaxe:
+     "- item"  ou  "* item"          → bullet
+     "[ ] item"  ou  "- [x] item"    → checkbox (clicável)
+   O texto cru continua sendo a fonte de verdade (é o que vai no banco). */
+const CHECK_RE = /^(\s*)(?:[-*]\s+)?\[([ xX])\]\s?(.*)$/;
+const BULLET_RE = /^(\s*)[-*]\s+(.*)$/;
+
+function DescriptionContent({ text, onToggleCheck }: { text: string; onToggleCheck: (lineIndex: number) => void }) {
+  return (
+    <div className="flex flex-col gap-1">
+      {text.split("\n").map((line, i) => {
+        const check = CHECK_RE.exec(line);
+        if (check) {
+          const [, indent, mark, content] = check;
+          const done = mark.toLowerCase() === "x";
+          return (
+            <div key={i} className="flex items-start gap-2" style={{ paddingLeft: indent.length * 8 }}>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); onToggleCheck(i); }}
+                aria-label={done ? "Desmarcar item" : "Marcar item"}
+                className="mt-[3px] flex h-[15px] w-[15px] shrink-0 cursor-pointer items-center justify-center rounded-[5px] border transition-colors"
+                style={{
+                  borderColor: done ? "rgba(52,211,153,0.85)" : "rgba(255,255,255,0.28)",
+                  background: done ? "rgba(52,211,153,0.85)" : "transparent",
+                }}
+              >
+                {done && <Icon name="Check" size={10} strokeWidth={3} style={{ color: "#0a0a0a" }} />}
+              </button>
+              <span className={cn("min-w-0 flex-1 whitespace-pre-wrap break-words", done && "text-muted-2 line-through")}>
+                <LinkifiedText text={content} />
+              </span>
+            </div>
+          );
+        }
+
+        const bullet = BULLET_RE.exec(line);
+        if (bullet) {
+          const [, indent, content] = bullet;
+          return (
+            <div key={i} className="flex items-start gap-2" style={{ paddingLeft: indent.length * 8 }}>
+              <span className="mt-[8px] h-[3px] w-[3px] shrink-0 rounded-full bg-white/45" />
+              <span className="min-w-0 flex-1 whitespace-pre-wrap break-words">
+                <LinkifiedText text={content} />
+              </span>
+            </div>
+          );
+        }
+
+        if (!line.trim()) return <div key={i} className="h-2" />;
+        return (
+          <p key={i} className="whitespace-pre-wrap break-words">
+            <LinkifiedText text={line} />
+          </p>
+        );
+      })}
+    </div>
+  );
+}
+
+function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicate, onToggleDone, onPersistDescription }: {
   task: Task;
   allGroups: string[];
   onSave: (fields: { title: string; due?: string; description?: string; branch?: string; groups?: string[]; flags?: string[] }) => void;
@@ -1468,6 +1540,7 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
   onDelete: () => void;
   onDuplicate: () => void;
   onToggleDone: () => void;
+  onPersistDescription: (description: string) => void;
 }) {
   const [done, setDone] = useState(task.done);
   const [title, setTitle] = useState(task.title);
@@ -1492,13 +1565,59 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
      natural do textarea vem do `rows`, e scrollHeight nunca é menor que isso —
      então o tamanho padrão continua sendo o piso, sem número mágico. */
   const DESC_MAX_H = 240;
+  // Posição do cursor a restaurar depois de mexer no texto por código
+  // (continuação de lista) — senão o caret pularia pro fim.
+  const caretRef = useRef<number | null>(null);
   useEffect(() => {
     const el = descRef.current;
     if (!el) return;
     el.style.height = "auto";
     const borders = el.offsetHeight - el.clientHeight; // box-sizing: border-box
     el.style.height = `${Math.min(el.scrollHeight + borders, DESC_MAX_H)}px`;
+    if (caretRef.current !== null) {
+      el.setSelectionRange(caretRef.current, caretRef.current);
+      caretRef.current = null;
+    }
   }, [description, descEditing]);
+
+  /** Marca/desmarca um item de checklist e já persiste (checklist é ação, não
+      rascunho — não some se fechar sem salvar). */
+  const toggleCheck = (lineIndex: number) => {
+    const lines = description.split("\n");
+    const line = lines[lineIndex];
+    if (line === undefined) return;
+    lines[lineIndex] = line.replace(/\[([ xX])\]/, (_m, c: string) => (c === " " ? "[x]" : "[ ]"));
+    const next = lines.join("\n");
+    setDescription(next);
+    onPersistDescription(next);
+  };
+
+  /* Enter continua a lista automaticamente: "- item" gera "- " na linha nova,
+     "[ ] item" gera "[ ] ". Enter numa linha de lista vazia sai da lista. */
+  const onDescKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key !== "Enter" || e.shiftKey) return;
+    const el = e.currentTarget;
+    const pos = el.selectionStart ?? 0;
+    if (pos !== (el.selectionEnd ?? pos)) return; // com seleção, deixa o padrão
+    const lineStart = description.lastIndexOf("\n", pos - 1) + 1;
+    const line = description.slice(lineStart, pos);
+    const m = /^(\s*)([-*]\s+)?(\[[ xX]\]\s?)?(.*)$/.exec(line);
+    if (!m) return;
+    const [, indent, bullet, box, content] = m;
+    if (!bullet && !box) return; // linha comum: Enter normal
+    e.preventDefault();
+    if (!content.trim()) {
+      // marcador sem conteúdo → limpa a linha e sai da lista
+      const next = description.slice(0, lineStart) + description.slice(pos);
+      setDescription(next);
+      caretRef.current = lineStart;
+      return;
+    }
+    const prefix = `${indent}${bullet ?? ""}${box ? "[ ] " : ""}`;
+    const next = `${description.slice(0, pos)}\n${prefix}${description.slice(pos)}`;
+    setDescription(next);
+    caretRef.current = pos + 1 + prefix.length;
+  };
 
   useEffect(() => {
     if (!calOpen) return;
@@ -1731,7 +1850,8 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
                 // desmontava no meio da digitação (perdia o foco e pulava o layout).
                 onFocus={() => setDescEditing(true)}
                 onBlur={() => setDescEditing(false)}
-                placeholder="Detalhes, observações, notas… (links viram clicáveis)"
+                onKeyDown={onDescKeyDown}
+                placeholder="Detalhes, notas…  ( - lista   ·   [ ] checklist )"
                 rows={3}
                 className="w-full resize-none overflow-y-auto rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-white/90 outline-none placeholder:text-white/25 transition-colors"
                 style={{ ...FIELD_STYLE, maxHeight: DESC_MAX_H }}
@@ -1740,10 +1860,10 @@ function EditTaskModal({ task, allGroups, onSave, onCancel, onDelete, onDuplicat
               <div
                 onClick={() => setDescEditing(true)}
                 title="Clique para editar"
-                className="min-h-[46px] cursor-text whitespace-pre-wrap break-words rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-white/90 transition-colors"
+                className="min-h-[46px] cursor-text rounded-xl px-3.5 py-2.5 text-[13px] leading-relaxed text-white/90 transition-colors"
                 style={FIELD_STYLE}
               >
-                <LinkifiedText text={description} />
+                <DescriptionContent text={description} onToggleCheck={toggleCheck} />
               </div>
             )}
           </div>
